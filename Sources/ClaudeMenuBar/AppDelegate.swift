@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import UserNotifications
 
@@ -176,11 +177,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(withTitle: installed ? "Remove hooks from settings.json" : "Install hooks into settings.json",
                      action: #selector(toggleHooks), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reveal settings.json", action: #selector(revealSettings), keyEquivalent: "").target = self
+        let login = menu.addItem(withTitle: "Open at login", action: #selector(toggleLoginItem), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    @objc private func toggleLoginItem() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not change the login item"
+            alert.informativeText = "This usually works only once the app is in /Applications."
+            alert.runModal()
+        }
     }
 
     @objc private func revealSettings() {

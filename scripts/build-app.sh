@@ -40,3 +40,12 @@ codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
 
 echo "Built $APP"
 echo "Run it with: open \"$APP\""
+
+if [ "${1:-}" = "--install" ]; then
+    DEST="/Applications/$APP_NAME.app"
+    rm -rf "$DEST"
+    cp -R "$APP" "$DEST"
+    open "$DEST"
+    echo "Installed to $DEST and launched"
+    echo "Right-click the menu bar icon to enable 'Open at login'"
+fi

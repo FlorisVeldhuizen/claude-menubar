@@ -16,16 +16,16 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 ## Install
 
 ```sh
-./scripts/build-app.sh
-open "build/Claude MenuBar.app"
+./scripts/build-app.sh --install
 ```
+
+That builds it, copies it to `/Applications` and launches it. Without `--install` it stays in
+`build/`. To start it with your Mac, right-click the menu bar icon and tick **Open at login**.
 
 Open the panel and press **Install hooks**. That writes the hook entries into
 `~/.claude/settings.json`, backing up the old file alongside it and leaving your existing hooks
 alone. Right-click the menu bar icon to remove them. Running sessions are picked up without
 restarting.
-
-For login startup, add the app in System Settings ▸ General ▸ Login Items.
 
 ## Using it
 
