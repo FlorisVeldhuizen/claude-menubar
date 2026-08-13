@@ -223,7 +223,18 @@ struct ConsoleView: View {
             .frame(height: detailHeight(for: request))
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
 
-            if !request.terminalOptions.isEmpty {
+            if request.gated {
+                HStack(spacing: 6) {
+                    Button("Allow") { store.answer(request, key: .option(1)) }
+                        .controlSize(.small)
+                        .keyboardShortcut(.defaultAction)
+                    Button("Deny") { store.answer(request, key: .cancel) }
+                        .controlSize(.small)
+                    Text("answered here · no terminal to reach")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else if !request.terminalOptions.isEmpty {
                 VStack(spacing: 4) {
                     ForEach(Array(request.terminalOptions.enumerated()), id: \.offset) { index, label in
                         Button {
@@ -260,9 +271,11 @@ struct ConsoleView: View {
                 .controlSize(.small)
                 .help("Cancel the prompt and send Claude a message instead")
                 Spacer()
-                Button("Terminal") { store.jump(toSessionOf: request) }
-                    .controlSize(.small)
-                    .help("Jump to that pane; the card stays until the prompt is settled")
+                if !request.gated {
+                    Button("Terminal") { store.jump(toSessionOf: request) }
+                        .controlSize(.small)
+                        .help("Jump to that pane; the card stays until the prompt is settled")
+                }
             }
 
             if noteTarget == request.id {

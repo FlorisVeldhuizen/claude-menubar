@@ -55,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 Log.write("BAD", String(decoding: body, as: UTF8.self))
                 return Data("{}".utf8)
             }
+            if path.hasPrefix("/pretool") {
+                let result = await store.gate(event)
+                return result.preToolUseJSON
+            }
             if path.hasPrefix("/permission") {
                 Log.write("ASK", String(decoding: body, as: UTF8.self))
                 let reply = await store.capture(event).json

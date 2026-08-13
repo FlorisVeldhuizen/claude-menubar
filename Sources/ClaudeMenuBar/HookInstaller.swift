@@ -4,6 +4,7 @@ import Foundation
 /// Our entries are identified by their loopback URL, so nothing foreign is touched.
 enum HookInstaller {
     static let permissionEvent = "PermissionRequest"
+    static let gateEvent = "PreToolUse"
     /// Run as a child of `claude`, so these inherit ITERM_SESSION_ID and pin the session to one pane.
     static let paneEvents = ["SessionStart", "UserPromptSubmit"]
 
@@ -26,6 +27,7 @@ enum HookInstaller {
     static func isInstalled(port: UInt16) -> Bool {
         guard let hooks = load()?["hooks"] as? [String: Any] else { return false }
         guard json(hooks[permissionEvent] ?? [:]).contains(paneMarker) else { return false }
+        guard json(hooks[gateEvent] ?? [:]).contains(gateURL(port: port)) else { return false }
         guard sessionEvents.allSatisfy({ json(hooks[$0] ?? [:]).contains(eventURL(port: port)) }) else { return false }
         // A pane event only counts once it is the command hook that reports ITERM_SESSION_ID.
         return paneEvents.allSatisfy { json(hooks[$0] ?? [:]).contains(paneMarker) }
@@ -48,6 +50,13 @@ enum HookInstaller {
                 port: port
             )
         }
+        // Fires before the permission flow and honours long timeouts, so a decision can be held here
+        // for sessions we cannot answer by keystroke.
+        hooks[gateEvent] = merge(
+            into: hooks[gateEvent],
+            entry: paneEntry(port: port, url: gateURL(port: port), relayResponse: true, matcher: "*", timeout: 300),
+            port: port
+        )
         for event in paneEvents {
             hooks[event] = merge(
                 into: hooks[event],
@@ -77,6 +86,7 @@ enum HookInstaller {
 
     static func permissionURL(port: UInt16) -> String { "http://127.0.0.1:\(port)/permission" }
     static func eventURL(port: UInt16) -> String { "http://127.0.0.1:\(port)/event" }
+    static func gateURL(port: UInt16) -> String { "http://127.0.0.1:\(port)/pretool" }
 
     private static func entry(url: String, timeout: Int, matcher: String?) -> [String: Any] {
         var group: [String: Any] = [
@@ -94,7 +104,8 @@ enum HookInstaller {
         port: UInt16,
         url: String? = nil,
         relayResponse: Bool = false,
-        matcher: String? = nil
+        matcher: String? = nil,
+        timeout: Int = 10
     ) -> [String: Any] {
         let target = url ?? eventURL(port: port)
         let relay = relayResponse ? "    sys.stdout.write(r.read().decode())\n" : ""
@@ -103,7 +114,7 @@ enum HookInstaller {
         try:
             d=json.load(sys.stdin)
             d["term_session"]=os.environ.get("ITERM_SESSION_ID","")
-            r=u.urlopen(u.Request("\(target)", json.dumps(d).encode(), {"Content-Type":"application/json"}), timeout=5)
+            r=u.urlopen(u.Request("\(target)", json.dumps(d).encode(), {"Content-Type":"application/json"}), timeout=\(timeout))
         \(relay)except Exception:
             pass
         """
@@ -111,7 +122,7 @@ enum HookInstaller {
             "hooks": [[
                 "type": "command",
                 "command": "/usr/bin/python3 -c '\(python)'",
-                "timeout": 10,
+                "timeout": timeout,
             ] as [String: Any]],
         ]
         if let matcher { group["matcher"] = matcher }
@@ -122,10 +133,11 @@ enum HookInstaller {
 
     private static func isOurs(_ handler: [String: Any], port: UInt16) -> Bool {
         if let url = handler["url"] as? String {
-            return url == permissionURL(port: port) || url == eventURL(port: port)
+            return url == permissionURL(port: port) || url == eventURL(port: port) || url == gateURL(port: port)
         }
         if let command = handler["command"] as? String {
             return command.contains(eventURL(port: port)) || command.contains(permissionURL(port: port))
+                || command.contains(gateURL(port: port))
         }
         return false
     }

@@ -42,6 +42,58 @@ final class Store {
     private var queuedKeys: [String: (key: TerminalKey, cwd: String)] = [:]
     private var promptShowing: Set<String> = []
     private var answered: [String: PendingRequest] = [:]
+    private var gateWaiters: [String: CheckedContinuation<DecisionResult, Never>] = [:]
+
+    /// Read-only work is allowed straight through; gating every call would drown the panel.
+    private static let alwaysSafe: Set<String> = [
+        "Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "TaskList", "TaskGet",
+    ]
+
+    /// A session that reports no pane cannot be answered by keystroke, so its decision is held here
+    /// instead. Fires before the permission flow, and PreToolUse honours long timeouts.
+    func gate(_ event: HookEvent) async -> DecisionResult {
+        let tool = event.toolName ?? "Tool"
+        let sessionId = event.sessionId ?? "unknown"
+        let reachable = !(event.termSession ?? "").isEmpty
+        let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
+
+        if reachable || Self.alwaysSafe.contains(tool) { return DecisionResult(decision: .ask, message: nil) }
+        if autoAllow.contains(Self.ruleKey(cwd: project ?? "", tool: tool)) {
+            return DecisionResult(decision: .allow, message: nil)
+        }
+
+        touch(sessionId: sessionId, cwd: project, state: .waiting, agentType: event.agentType)
+        var request = PendingRequest(
+            id: event.toolUseId ?? UUID().uuidString,
+            sessionId: sessionId,
+            toolName: tool,
+            cwd: sessions.first { $0.id == sessionId }?.cwd ?? project ?? "",
+            detail: PendingRequest.detail(for: tool, input: event.toolInput),
+            context: Transcript.lastAssistantText(path: event.transcriptPath),
+            questions: PendingRequest.questions(from: event.toolInput),
+            permissionLevel: event.permissionLevel,
+            receivedAt: Date()
+        )
+        request.gated = true
+        pending.append(request)
+        Log.write("GATE", "holding \(tool) for \(request.folder) (no pane)")
+        onChange?()
+        onNewRequest?(request)
+
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(280))
+            self?.releaseGate(request.id, decision: .ask)
+        }
+        return await withCheckedContinuation { continuation in
+            gateWaiters[request.id] = continuation
+        }
+    }
+
+    private func releaseGate(_ id: String, decision: Decision, message: String? = nil) {
+        guard let continuation = gateWaiters.removeValue(forKey: id) else { return }
+        Log.write("GATE", "released \(id) as \(decision.rawValue)")
+        continuation.resume(returning: DecisionResult(decision: decision, message: message))
+    }
     private(set) var notice: String?
 
     func pane(for sessionId: String) -> String? { panes[sessionId] }
@@ -49,7 +101,7 @@ final class Store {
     /// A prompt can be dismissed in ways that fire no hook at all — answering No, or interrupting.
     /// So each open card is checked against what is actually on screen.
     func verifyPending() {
-        for request in pending {
+        for request in pending where !request.gated {
             let id = request.id
             TerminalFocus.readOptions(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] options in
                 Task { @MainActor in
@@ -66,7 +118,7 @@ final class Store {
 
     /// Once the prompt is drawn, mirror its real options onto the card.
     private func readMenu(for sessionId: String) {
-        guard let request = pending.first(where: { $0.sessionId == sessionId }) else { return }
+        guard let request = pending.first(where: { $0.sessionId == sessionId }), !request.gated else { return }
         TerminalFocus.readOptions(pane: panes[sessionId], cwd: request.cwd) { [weak self] options in
             Task { @MainActor in
                 guard let self, !options.isEmpty,
@@ -144,6 +196,15 @@ final class Store {
         if focusedRequestId == request.id { focusedRequestId = nil }
         onChange?()
 
+        if request.gated {
+            switch key {
+            case .option: releaseGate(request.id, decision: .allow)
+            case .cancel: releaseGate(request.id, decision: .deny, message: "Denied from the menu bar.")
+            case .cancelThenSay(let text): releaseGate(request.id, decision: .deny, message: text)
+            }
+            return
+        }
+
         if promptShowing.contains(request.sessionId) {
             deliver(key, session: request.sessionId, cwd: request.cwd)
         } else {
@@ -179,6 +240,7 @@ final class Store {
     /// Drops a request whose session is gone or whose hook timed out, so a dead card can't sit there.
     private func expire(_ id: String) {
         guard pending.contains(where: { $0.id == id }) else { return }
+        releaseGate(id, decision: .ask)
         Log.write("CARD", "removed id=\(id)")
         pending.removeAll { $0.id == id }
         if focusedRequestId == id { focusedRequestId = nil }

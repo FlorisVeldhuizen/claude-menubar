@@ -10,8 +10,8 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 
 - macOS 14+, Swift 6 to build
 - Claude Code, with hooks writable in `~/.claude/settings.json`
-- iTerm2 **to answer prompts**. Sessions elsewhere still appear with their status and requests; the
-  app just can't answer those and says so rather than guessing.
+- iTerm2 for the keystroke path. Sessions elsewhere — VS Code, another terminal — are handled by
+  gating instead, automatically. See below.
 
 ## Install
 
@@ -72,6 +72,18 @@ the app types nothing and tells you.
 **Failure is safe.** With the app not running the connection is refused, which Claude Code treats as
 a non-blocking error, and everything prompts in the terminal as before.
 
+### Sessions with no terminal to type into
+
+A session in VS Code or another terminal has no pane to address, so it's handled the other way round.
+`PreToolUse` runs before the permission flow and, unlike `PermissionRequest`, does honour long
+timeouts — so for those sessions the app holds the decision there and answers through the hook. No
+keystrokes involved.
+
+Which mode a session gets is decided per call, by whether it reported a pane, so nothing to
+configure. The cost is that `PreToolUse` fires for every tool call and can't tell how risky one is:
+read-only tools pass straight through, and everything else asks. If nothing answers within 280
+seconds the app returns no decision and the session prompts as it normally would.
+
 ## Configuration
 
 `CLAUDE_MENUBAR_PORT` (default `7788`) sets the loopback port; change it and reinstall the hooks.
@@ -82,8 +94,10 @@ decision and keystroke in `trace.log`.
 
 ## Limits
 
-- Answering and jumping are iTerm2-only. Porting means two calls in `TerminalFocus.swift`: address a
-  pane, and write a string to it.
+- Jumping to a session is iTerm2-only, as is the keystroke path. Porting means two calls in
+  `TerminalFocus.swift`: address a pane, and write a string to it.
+- Gated sessions can't use **Terminal**, and see Allow/Deny rather than Claude's own option list,
+  since there is no on-screen menu to mirror.
 - Headless `claude -p` runs have no prompt to intercept.
 - Sessions on another machine can't reach your loopback.
 

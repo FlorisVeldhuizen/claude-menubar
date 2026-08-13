@@ -44,6 +44,17 @@ struct DecisionResult {
     let decision: Decision
     let message: String?
 
+    /// PreToolUse uses a different field name, and "ask" there means "no decision from us".
+    var preToolUseJSON: Data {
+        guard decision != .ask else { return Data("{}".utf8) }
+        var out: [String: Any] = [
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision.rawValue,
+        ]
+        if let message, !message.isEmpty { out["permissionDecisionReason"] = message }
+        return (try? JSONSerialization.data(withJSONObject: ["hookSpecificOutput": out])) ?? Data("{}".utf8)
+    }
+
     var json: Data {
         var out: [String: Any] = [
             "hookEventName": "PermissionRequest",
@@ -106,6 +117,8 @@ struct PendingRequest: Identifiable {
     let receivedAt: Date
     /// The numbered menu actually on screen, read from the pane once Claude draws it.
     var terminalOptions: [String] = []
+    /// True when the session cannot be reached by keystroke, so the answer goes back through the hook.
+    var gated = false
 
     var folder: String {
         cwd.isEmpty ? "unknown" : (cwd as NSString).lastPathComponent
