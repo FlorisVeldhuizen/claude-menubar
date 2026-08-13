@@ -35,14 +35,14 @@ enum HookInstaller {
 
     /// Our hooks change shape as the app grows. If any of ours are present, rewrite them to the
     /// current form on launch so an upgrade never leaves a half-working install behind.
-    static func refreshIfInstalled(port: UInt16, permissionTimeout: Int) {
+    static func refreshIfInstalled(port: UInt16) {
         guard let hooks = load()?["hooks"] as? [String: Any] else { return }
         let ours = json(hooks).contains("127.0.0.1:\(port)")
         guard ours, !isInstalled(port: port) || !json(hooks).contains("entrypoint") else { return }
-        try? install(port: port, permissionTimeout: permissionTimeout)
+        try? install(port: port)
     }
 
-    static func install(port: UInt16, permissionTimeout: Int) throws {
+    static func install(port: UInt16) throws {
         var settings = load() ?? [:]
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
 

@@ -20,10 +20,6 @@ final class Store {
         return pending.first
     }
 
-    var activeIndex: Int {
-        guard let active = activeRequest else { return 0 }
-        return (pending.firstIndex { $0.id == active.id } ?? 0) + 1
-    }
 
     func focus(requestId: String) {
         focusedRequestId = requestId
@@ -72,7 +68,7 @@ final class Store {
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
         if reachable || Self.alwaysSafe.contains(tool) { return DecisionResult(decision: .ask, message: nil) }
-        if autoAllow.contains(Self.ruleKey(cwd: project ?? "", tool: tool)) {
+        if autoAllow.contains(Persistence.ruleKey(cwd: project ?? "", tool: tool)) {
             return DecisionResult(decision: .allow, message: nil)
         }
 
@@ -99,8 +95,13 @@ final class Store {
             try? await Task.sleep(for: .seconds(280))
             self?.releaseGate(request.id, decision: .ask)
         }
-        return await withCheckedContinuation { continuation in
-            gateWaiters[request.id] = continuation
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                gateWaiters[request.id] = continuation
+            }
+        } onCancel: {
+            // The session went away while we held its decision; drop the card with it.
+            Task { @MainActor [weak self] in self?.expire(request.id) }
         }
     }
 
@@ -113,34 +114,23 @@ final class Store {
 
     func pane(for sessionId: String) -> String? { panes[sessionId] }
 
-    /// A prompt can be dismissed in ways that fire no hook at all — answering No, or interrupting.
-    /// So each open card is checked against what is actually on screen.
+    /// One read per card does both jobs: mirror the menu Claude is showing, and notice when it has
+    /// gone — a prompt can be dismissed in ways that fire no hook at all, such as answering No.
     func verifyPending() {
         for request in pending where !request.gated {
             let id = request.id
             TerminalFocus.readOptions(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] options in
                 Task { @MainActor in
-                    guard let self, options.isEmpty,
-                          let index = self.pending.firstIndex(where: { $0.id == id }),
-                          !self.pending[index].terminalOptions.isEmpty
-                    else { return }
-                    Log.write("CARD", "prompt gone from screen")
-                    self.expire(id)
+                    guard let self, let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
+                    if options.isEmpty {
+                        guard !self.pending[index].terminalOptions.isEmpty else { return }
+                        Log.write("CARD", "prompt gone from screen")
+                        self.expire(id)
+                    } else if self.pending[index].terminalOptions != options {
+                        self.pending[index].terminalOptions = options
+                        self.onChange?()
+                    }
                 }
-            }
-        }
-    }
-
-    /// Once the prompt is drawn, mirror its real options onto the card.
-    private func readMenu(for sessionId: String) {
-        guard let request = pending.first(where: { $0.sessionId == sessionId }), !request.gated else { return }
-        TerminalFocus.readOptions(pane: panes[sessionId], cwd: request.cwd) { [weak self] options in
-            Task { @MainActor in
-                guard let self, !options.isEmpty,
-                      let index = self.pending.firstIndex(where: { $0.id == request.id })
-                else { return }
-                self.pending[index].terminalOptions = options
-                self.onChange?()
             }
         }
     }
@@ -151,8 +141,8 @@ final class Store {
     }
 
     init() {
-        autoAllow = Self.loadAutoAllow()
-        panes = Self.loadPanes()
+        autoAllow = Persistence.loadRules()
+        panes = Persistence.loadPanes()
     }
 
     private var clients: [String: SessionClient] = [:]
@@ -170,10 +160,17 @@ final class Store {
         Log.write("CLIENT", "\(sessionId) is \(client.label)")
     }
 
+    private func forget(_ sessionId: String) {
+        clients.removeValue(forKey: sessionId)
+        answered.removeValue(forKey: sessionId)
+        guard panes.removeValue(forKey: sessionId) != nil else { return }
+        Persistence.savePanes(panes)
+    }
+
     private func remember(pane: String, for sessionId: String) {
         guard panes[sessionId] != pane else { return }
         panes[sessionId] = pane
-        Self.savePanes(panes)
+        Persistence.savePanes(panes)
         Log.write("PANE", "\(sessionId) -> \(pane)")
     }
 
@@ -188,7 +185,7 @@ final class Store {
         note(event, for: sessionId)
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
-        if autoAllow.contains(Self.ruleKey(cwd: project ?? "", tool: tool)) {
+        if autoAllow.contains(Persistence.ruleKey(cwd: project ?? "", tool: tool)) {
             return DecisionResult(decision: .allow, message: nil)
         }
 
@@ -218,8 +215,8 @@ final class Store {
     /// Answer the prompt in the terminal. Waits for it to be drawn if it isn't yet.
     func answer(_ request: PendingRequest, key: TerminalKey, remember: Bool = false) {
         if remember {
-            autoAllow.insert(Self.ruleKey(cwd: request.cwd, tool: request.toolName))
-            Self.saveAutoAllow(autoAllow)
+            autoAllow.insert(Persistence.ruleKey(cwd: request.cwd, tool: request.toolName))
+            Persistence.saveRules(autoAllow)
         }
         notice = nil
         answered[request.sessionId] = request
@@ -288,46 +285,8 @@ final class Store {
 
     func clearAutoAllow() {
         autoAllow.removeAll()
-        Self.saveAutoAllow(autoAllow)
+        Persistence.saveRules(autoAllow)
         onChange?()
-    }
-
-    /// Keyed by project directory, not session: session ids are new every run, so a saved rule would never match.
-    private static func ruleKey(cwd: String, tool: String) -> String { "\(cwd)|\(tool)" }
-
-    private static var rulesURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ClaudeMenuBar", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("always-allow.json")
-    }
-
-    private static func loadAutoAllow() -> Set<String> {
-        guard let data = try? Data(contentsOf: rulesURL),
-              let list = try? JSONDecoder().decode([String].self, from: data)
-        else { return [] }
-        return Set(list)
-    }
-
-    private static var panesURL: URL {
-        rulesURL.deletingLastPathComponent().appendingPathComponent("panes.json")
-    }
-
-    private static func loadPanes() -> [String: String] {
-        guard let data = try? Data(contentsOf: panesURL),
-              let map = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
-        return map
-    }
-
-    private static func savePanes(_ map: [String: String]) {
-        guard let data = try? JSONEncoder().encode(map) else { return }
-        try? data.write(to: panesURL, options: .atomic)
-    }
-
-    private static func saveAutoAllow(_ rules: Set<String>) {
-        guard let data = try? JSONEncoder().encode(rules.sorted()) else { return }
-        try? data.write(to: rulesURL, options: .atomic)
     }
 
     // MARK: - Keeping the list honest
@@ -366,9 +325,6 @@ final class Store {
         }
     }
 
-    func dismissRequest(_ request: PendingRequest) {
-        expire(request.id)
-    }
 
     func dismiss(_ sessionId: String) {
         sessions.removeAll { $0.id == sessionId }
@@ -435,11 +391,12 @@ final class Store {
         if event.hookEventName == "Notification" {
             promptShowing.insert(sessionId)
             flushKey(sessionId)
-            readMenu(for: sessionId)
+            verifyPending()
         }
         settledElsewhere(event)
         switch event.hookEventName {
         case "SessionEnd":
+            forget(sessionId)
             sessions.removeAll { $0.id == sessionId }
             pending.removeAll { $0.sessionId == sessionId }
         case "UserPromptSubmit", "SessionStart", "PostToolUse":

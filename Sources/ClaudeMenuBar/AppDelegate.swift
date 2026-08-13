@@ -5,7 +5,6 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     static let port: UInt16 = UInt16(ProcessInfo.processInfo.environment["CLAUDE_MENUBAR_PORT"] ?? "") ?? 7788
-    static let permissionTimeout = Int(ProcessInfo.processInfo.environment["CLAUDE_MENUBAR_TIMEOUT"] ?? "") ?? 300
     static let staleAfter = TimeInterval(Int(ProcessInfo.processInfo.environment["CLAUDE_MENUBAR_STALE_MINUTES"] ?? "") ?? 30) * 60
 
     private let store = Store()
@@ -22,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         store.onChange = { [weak self] in self?.refreshStatusItem() }
         store.onNewRequest = { [weak self] request in self?.announce(request) }
 
-        HookInstaller.refreshIfInstalled(port: Self.port, permissionTimeout: Self.permissionTimeout)
+        HookInstaller.refreshIfInstalled(port: Self.port)
         startServer()
         refreshStatusItem()
 
@@ -76,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } catch {
             let alert = NSAlert()
             alert.messageText = "Port \(Self.port) is busy"
-            alert.informativeText = "Another copy of Claude MenuBar may be running. Set CLAUDE_MENUBAR_PORT to use a different port."
+            alert.informativeText = "Another copy may be running. Set CLAUDE_MENUBAR_PORT to use a different port."
             alert.runModal()
             NSApp.terminate(nil)
         }
@@ -193,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if HookInstaller.isInstalled(port: Self.port) {
                 try HookInstaller.uninstall(port: Self.port)
             } else {
-                try HookInstaller.install(port: Self.port, permissionTimeout: Self.permissionTimeout)
+                try HookInstaller.install(port: Self.port)
             }
             refreshStatusItem()
         } catch {

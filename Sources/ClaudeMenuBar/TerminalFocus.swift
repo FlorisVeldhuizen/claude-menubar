@@ -145,12 +145,6 @@ enum TerminalFocus {
             .replacingOccurrences(of: "\n", with: " ")
     }
 
-    static func canReach(pane: String?, cwd: String, completion: @escaping (Bool) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let found = resolve(pane: pane, cwd: cwd) != nil
-            DispatchQueue.main.async { completion(found) }
-        }
-    }
 
     private static func sessionGUID(forCwd cwd: String) -> String? {
         // Every match is listed, not just the first: two sessions in one directory are ambiguous,
