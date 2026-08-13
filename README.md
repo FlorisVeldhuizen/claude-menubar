@@ -111,8 +111,9 @@ decision and keystroke in `trace.log`.
 
 - Jumping to a session is iTerm2-only, as is the keystroke path. Porting means two calls in
   `TerminalFocus.swift`: address a pane, and write a string to it.
-- Gated sessions can't use **Terminal**, and see Allow/Deny rather than Claude's own option list,
-  since there is no on-screen menu to mirror.
+- Gated sessions see the options a tool declares, but not the ones Claude Code appends to its own
+  menu, since there is no rendered menu to read. "Chat about this" is offered explicitly; "Type
+  something" and notes are not.
 - Headless `claude -p` runs have no prompt to intercept.
 - Sessions on another machine can't reach your loopback.
 
