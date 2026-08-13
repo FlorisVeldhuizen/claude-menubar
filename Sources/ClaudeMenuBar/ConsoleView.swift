@@ -312,9 +312,15 @@ struct ConsoleView: View {
             }
 
             HStack(spacing: 6) {
-                Button("Always allow") { store.answer(request, key: .option(1), remember: true) }
+                // Only where Claude offers nothing better. Its own "don't ask again" is scoped to the
+                // command; ours covers every call of that tool in the project, so it must not compete.
+                if request.gated, choices(in: request) == nil {
+                    Button("Always allow \(request.toolName)") {
+                        store.answer(request, key: .option(1), remember: true)
+                    }
                     .controlSize(.small)
-                    .help("Answer yes now, and auto-allow \(request.toolName) in \(request.folder) from here on")
+                    .help("Allow every \(request.toolName) call in \(request.folder) from here on, without asking")
+                }
                 if choices(in: request) == nil {
                     Button("Say why…") {
                         noteText = ""

@@ -40,7 +40,6 @@ that hasn't reported in yet.
 | Button | Effect |
 | :-- | :-- |
 | Claude's own options | Answers the prompt with that choice |
-| **Always allow** | Answers yes, and auto-allows that tool in that project from then on |
 | **Say why…** | Cancels the prompt and sends Claude your message instead |
 | **Terminal** | Jumps to that pane; the card stays until the prompt is settled |
 
