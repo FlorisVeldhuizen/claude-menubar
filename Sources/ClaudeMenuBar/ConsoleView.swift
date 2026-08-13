@@ -263,6 +263,16 @@ struct ConsoleView: View {
                         }
                         .controlSize(.small)
                     }
+                    // Claude Code appends this to its own menu; a gated card only sees the declared options.
+                    Button {
+                        noteText = ""
+                        noteTarget = noteTarget == request.id ? nil : request.id
+                    } label: {
+                        Text("Chat about this…")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .controlSize(.small)
                 }
             } else if request.gated {
                 HStack(spacing: 6) {
@@ -305,12 +315,14 @@ struct ConsoleView: View {
                 Button("Always allow") { store.answer(request, key: .option(1), remember: true) }
                     .controlSize(.small)
                     .help("Answer yes now, and auto-allow \(request.toolName) in \(request.folder) from here on")
-                Button("Say why…") {
-                    noteText = ""
-                    noteTarget = noteTarget == request.id ? nil : request.id
+                if choices(in: request) == nil {
+                    Button("Say why…") {
+                        noteText = ""
+                        noteTarget = noteTarget == request.id ? nil : request.id
+                    }
+                    .controlSize(.small)
+                    .help("Cancel the prompt and send Claude a message instead")
                 }
-                .controlSize(.small)
-                .help("Cancel the prompt and send Claude a message instead")
                 Spacer()
                 if !request.gated {
                     Button("Terminal") { store.jump(toSessionOf: request) }
@@ -321,7 +333,7 @@ struct ConsoleView: View {
 
             if noteTarget == request.id {
                 HStack(spacing: 6) {
-                    TextField("Tell Claude what to do instead…", text: $noteText)
+                    TextField(request.gated ? "Say what you want instead…" : "Tell Claude what to do instead…", text: $noteText)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
                         .onSubmit { sendNote(request) }
