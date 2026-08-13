@@ -25,6 +25,20 @@ final class Store {
         return (pending.firstIndex { $0.id == active.id } ?? 0) + 1
     }
 
+    func focus(requestId: String) {
+        focusedRequestId = requestId
+        onChange?()
+    }
+
+    func step(_ delta: Int) {
+        guard pending.count > 1, let active = activeRequest,
+              let index = pending.firstIndex(where: { $0.id == active.id })
+        else { return }
+        let next = (index + delta + pending.count) % pending.count
+        focusedRequestId = pending[next].id
+        onChange?()
+    }
+
     func focus(sessionId: String) {
         guard let request = pending.first(where: { $0.sessionId == sessionId }) else { return }
         focusedRequestId = request.id
@@ -75,6 +89,7 @@ final class Store {
             receivedAt: Date()
         )
         request.gated = true
+        note(event, for: sessionId)
         pending.append(request)
         Log.write("GATE", "holding \(tool) for \(request.folder) (no pane)")
         onChange?()
@@ -140,6 +155,21 @@ final class Store {
         panes = Self.loadPanes()
     }
 
+    private var clients: [String: SessionClient] = [:]
+
+    func client(for sessionId: String) -> SessionClient { clients[sessionId] ?? .other }
+
+    private func note(_ event: HookEvent, for sessionId: String) {
+        let client = SessionClient.from(
+            entrypoint: event.entrypoint,
+            termProgram: event.termProgram,
+            pane: event.termSession
+        )
+        guard client != .other, clients[sessionId] != client else { return }
+        clients[sessionId] = client
+        Log.write("CLIENT", "\(sessionId) is \(client.label)")
+    }
+
     private func remember(pane: String, for sessionId: String) {
         guard panes[sessionId] != pane else { return }
         panes[sessionId] = pane
@@ -155,6 +185,7 @@ final class Store {
         let tool = event.toolName ?? "Tool"
         let sessionId = event.sessionId ?? "unknown"
         if let pane = event.termSession, !pane.isEmpty { remember(pane: pane, for: sessionId) }
+        note(event, for: sessionId)
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
         if autoAllow.contains(Self.ruleKey(cwd: project ?? "", tool: tool)) {
@@ -201,10 +232,12 @@ final class Store {
             case .option: releaseGate(request.id, decision: .allow)
             case .cancel: releaseGate(request.id, decision: .deny, message: "Denied from the menu bar.")
             case .cancelThenSay(let text): releaseGate(request.id, decision: .deny, message: text)
+            case .reply(let text): releaseGate(request.id, decision: .deny, message: text)
             }
             return
         }
 
+        if case .reply = key { return }
         if promptShowing.contains(request.sessionId) {
             deliver(key, session: request.sessionId, cwd: request.cwd)
         } else {
@@ -234,7 +267,7 @@ final class Store {
         focusedRequestId = request.id
         notice = "Could not tell which pane \(request.folder) is in — answer it in the terminal."
         onChange?()
-        TerminalFocus.reveal(pane: panes[request.sessionId], cwd: request.cwd)
+        TerminalFocus.reveal(pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId))
     }
 
     /// Drops a request whose session is gone or whose hook timed out, so a dead card can't sit there.
@@ -312,7 +345,7 @@ final class Store {
     func jump(toSessionOf request: PendingRequest) {
         notice = nil
         onChange?()
-        TerminalFocus.reveal(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] exact in
+        TerminalFocus.reveal(pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId)) { [weak self] exact in
             guard !exact else { return }
             Task { @MainActor in
                 self?.notice = "Don't know \(request.folder)'s pane yet — answer it in the terminal."
@@ -324,7 +357,7 @@ final class Store {
     func jump(to session: SessionInfo) {
         notice = nil
         onChange?()
-        TerminalFocus.reveal(pane: session.pane ?? panes[session.id], cwd: session.cwd) { [weak self] exact in
+        TerminalFocus.reveal(pane: session.pane ?? panes[session.id], cwd: session.cwd, client: session.client) { [weak self] exact in
             guard !exact else { return }
             Task { @MainActor in
                 self?.notice = "Don't know \(session.folder)'s pane yet — send it one prompt to register it."
@@ -396,6 +429,7 @@ final class Store {
     func record(_ event: HookEvent) {
         guard let sessionId = event.sessionId else { return }
         if let pane = event.termSession, !pane.isEmpty { remember(pane: pane, for: sessionId) }
+        note(event, for: sessionId)
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
         // This fires the moment Claude Code draws its prompt, which is when a keystroke can land.
         if event.hookEventName == "Notification" {

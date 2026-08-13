@@ -3,7 +3,22 @@ import AppKit
 /// Brings the terminal tab running a given session to the front.
 /// Claude Code's hooks carry no PID, so the session is matched by working directory.
 enum TerminalFocus {
-    static func reveal(pane: String?, cwd: String, completion: @escaping (Bool) -> Void = { _ in }) {
+    static func reveal(
+        pane: String?,
+        cwd: String,
+        client: SessionClient = .other,
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        // VS Code has no addressable pane, but its URL handler focuses the window for a folder.
+        if client == .vscode, !cwd.isEmpty {
+            let encoded = cwd.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? cwd
+            if let url = URL(string: "vscode://file\(encoded)") {
+                NSWorkspace.shared.open(url)
+                Log.write("JUMP", "opened VS Code at \(cwd)")
+                completion(true)
+                return
+            }
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             if let guid = resolve(pane: pane, cwd: cwd), focusITerm(guid: guid) {
                 Log.write("JUMP", "focused pane for \(cwd)")
@@ -40,6 +55,10 @@ enum TerminalFocus {
                 keystrokes = #"tell s to write text "\#(number)" newline NO"#
             case .cancel:
                 keystrokes = "tell s to write text (character id 27) newline NO"
+            case .reply:
+                // Only meaningful for gated sessions, which never reach this path.
+                DispatchQueue.main.async { completion(false) }
+                return
             case .cancelThenSay(let text):
                 // Escape returns focus to the composer, then the note goes in as an ordinary message.
                 keystrokes = """
@@ -177,7 +196,7 @@ enum TerminalFocus {
     }
 
     private static func activateAnyTerminal() {
-        for id in ["com.googlecode.iterm2", "com.apple.Terminal"] {
+        for id in ["com.googlecode.iterm2", "com.apple.Terminal", "com.microsoft.VSCode"] {
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
                 app.activate(options: [.activateAllWindows])
                 return

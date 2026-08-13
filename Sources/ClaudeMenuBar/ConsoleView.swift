@@ -51,6 +51,10 @@ struct ConsoleView: View {
         }
         .frame(width: ConsoleView.size.width, height: ConsoleView.size.height)
         .onReceive(tick) { now = $0 }
+        .background {
+            Button("") { store.step(1) }.keyboardShortcut("]", modifiers: .command).hidden()
+            Button("") { store.step(-1) }.keyboardShortcut("[", modifiers: .command).hidden()
+        }
     }
 
     static let size = CGSize(width: 420, height: 580)
@@ -111,19 +115,17 @@ struct ConsoleView: View {
     /// Exactly one request at a time in a fixed-size slot, so nothing below it ever moves.
     private var requestSlot: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                if let notice = store.notice {
-                    Text(notice)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
-                        .lineLimit(2)
-                        .padding(.horizontal, 12)
-                } else {
-                    section(store.pending.count > 1
-                        ? "Waiting on you · \(store.activeIndex) of \(store.pending.count)"
-                        : "Waiting on you")
-                }
-                Spacer()
+            if let notice = store.notice {
+                Text(notice)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .padding(.horizontal, 12)
+                    .frame(height: 18)
+            } else if store.pending.count > 1 {
+                queueChips
+            } else {
+                HStack { section("Waiting on you"); Spacer() }.frame(height: 18)
             }
 
             if let request = store.activeRequest {
@@ -142,6 +144,31 @@ struct ConsoleView: View {
         .frame(minHeight: 286, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.easeInOut(duration: 0.18), value: store.activeRequest?.id)
+    }
+
+    /// One chip per pending decision, so switching is a single click rather than hunting the list.
+    private var queueChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(store.pending) { request in
+                    let active = store.activeRequest?.id == request.id
+                    Button { store.focus(requestId: request.id) } label: {
+                        Text(request.folder)
+                            .font(.caption2.weight(active ? .semibold : .regular))
+                            .lineLimit(1)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                active ? Color.orange.opacity(0.30) : Color.primary.opacity(0.07),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .frame(height: 18)
     }
 
     private var installBanner: some View {
@@ -223,7 +250,21 @@ struct ConsoleView: View {
             .frame(height: detailHeight(for: request))
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
 
-            if request.gated {
+            if request.gated, let question = choices(in: request) {
+                VStack(spacing: 4) {
+                    ForEach(question.options) { option in
+                        Button {
+                            store.answer(request, key: .reply(
+                                "The user answered \"\(question.text)\" with: \(option.label). "
+                                + "Continue with that choice and do not ask again."
+                            ))
+                        } label: {
+                            Text(option.label).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            } else if request.gated {
                 HStack(spacing: 6) {
                     Button("Allow") { store.answer(request, key: .option(1)) }
                         .controlSize(.small)

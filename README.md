@@ -84,6 +84,13 @@ configure. The cost is that `PreToolUse` fires for every tool call and can't tel
 read-only tools pass straight through, and everything else asks. If nothing answers within 280
 seconds the app returns no decision and the session prompts as it normally would.
 
+For a gated question the app shows Claude's own options, read from the tool's arguments. Picking one
+denies the call with your choice as the reason, since the hook has no way to hand back an answer —
+Claude reads it and carries on, but it does see a denied tool call rather than an answered question.
+
+Jumping to a gated session opens VS Code at that folder via its URL handler, when the session
+reported itself as VS Code.
+
 ## Configuration
 
 `CLAUDE_MENUBAR_PORT` (default `7788`) sets the loopback port; change it and reinstall the hooks.

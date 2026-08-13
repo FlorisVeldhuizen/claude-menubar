@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         store.onChange = { [weak self] in self?.refreshStatusItem() }
         store.onNewRequest = { [weak self] request in self?.announce(request) }
 
+        HookInstaller.refreshIfInstalled(port: Self.port, permissionTimeout: Self.permissionTimeout)
         startServer()
         refreshStatusItem()
 

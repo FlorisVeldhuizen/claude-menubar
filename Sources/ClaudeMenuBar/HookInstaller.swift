@@ -33,6 +33,15 @@ enum HookInstaller {
         return paneEvents.allSatisfy { json(hooks[$0] ?? [:]).contains(paneMarker) }
     }
 
+    /// Our hooks change shape as the app grows. If any of ours are present, rewrite them to the
+    /// current form on launch so an upgrade never leaves a half-working install behind.
+    static func refreshIfInstalled(port: UInt16, permissionTimeout: Int) {
+        guard let hooks = load()?["hooks"] as? [String: Any] else { return }
+        let ours = json(hooks).contains("127.0.0.1:\(port)")
+        guard ours, !isInstalled(port: port) || !json(hooks).contains("entrypoint") else { return }
+        try? install(port: port, permissionTimeout: permissionTimeout)
+    }
+
     static func install(port: UInt16, permissionTimeout: Int) throws {
         var settings = load() ?? [:]
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
@@ -114,6 +123,8 @@ enum HookInstaller {
         try:
             d=json.load(sys.stdin)
             d["term_session"]=os.environ.get("ITERM_SESSION_ID","")
+            d["term_program"]=os.environ.get("TERM_PROGRAM","")
+            d["entrypoint"]=os.environ.get("CLAUDE_CODE_ENTRYPOINT","")
             r=u.urlopen(u.Request("\(target)", json.dumps(d).encode(), {"Content-Type":"application/json"}), timeout=\(timeout))
         \(relay)except Exception:
             pass

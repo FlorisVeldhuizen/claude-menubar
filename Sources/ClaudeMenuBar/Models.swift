@@ -13,6 +13,8 @@ struct HookEvent: Decodable {
     let notificationType: String?
     let agentType: String?
     let termSession: String?
+    let termProgram: String?
+    let entrypoint: String?
 
     static func decode(_ data: Data) throws -> HookEvent {
         let d = JSONDecoder()
@@ -30,12 +32,15 @@ enum TerminalKey: CustomStringConvertible {
     case option(Int)
     case cancel
     case cancelThenSay(String)
+    /// Gated sessions only: block the call and hand Claude the answer as the reason.
+    case reply(String)
 
     var description: String {
         switch self {
         case .option(let n): return "option \(n)"
         case .cancel: return "escape"
         case .cancelThenSay(let text): return "escape + \"\(text.prefix(40))\""
+        case .reply(let text): return "reply \"\(text.prefix(40))\""
         }
     }
 }
@@ -79,6 +84,31 @@ enum SessionState: String {
     }
 }
 
+/// Where a session runs, which decides how it can be answered and focused.
+enum SessionClient: String {
+    case iTerm, vscode, terminal, other
+
+    static func from(entrypoint: String?, termProgram: String?, pane: String?) -> SessionClient {
+        if let entrypoint, entrypoint.contains("vscode") { return .vscode }
+        if let pane, !pane.isEmpty { return .iTerm }
+        switch termProgram {
+        case "iTerm.app": return .iTerm
+        case "vscode": return .vscode
+        case "Apple_Terminal": return .terminal
+        default: return .other
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .iTerm: return "iTerm2"
+        case .vscode: return "VS Code"
+        case .terminal: return "Terminal"
+        case .other: return "session"
+        }
+    }
+}
+
 struct SessionInfo: Identifiable {
     let id: String
     var cwd: String
@@ -87,6 +117,7 @@ struct SessionInfo: Identifiable {
     var agentType: String?
     /// Set for sessions found by scanning processes rather than by a hook.
     var pane: String?
+    var client: SessionClient = .other
 
     var folder: String {
         cwd.isEmpty ? "unknown" : (cwd as NSString).lastPathComponent
