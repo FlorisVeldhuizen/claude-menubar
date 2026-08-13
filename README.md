@@ -46,6 +46,15 @@ that hasn't reported in yet.
 Answering never pulls a session to the front — that's the point. Focus moves only via **Terminal**,
 the card's header, or clicking a session with no pending request.
 
+With several decisions waiting, the header becomes one chip per project; click one or use `⌘[` /
+`⌘]` to switch.
+
+**Always allow \<tool\>** appears only where Claude offers no "don't ask again" of its own — that is,
+on gated cards that aren't questions. Claude's version is scoped to the command and is already in the
+mirrored menu; ours covers every call of that tool in the project, so it stays out of the way.
+It's kept in `~/Library/Application Support/ClaudeMenuBar/always-allow.json` rather than your Claude
+permission rules, and clears from the `⋯` menu.
+
 ## How it works
 
 Claude Code fires a `PermissionRequest` hook before prompting, so the app should hold that open until
