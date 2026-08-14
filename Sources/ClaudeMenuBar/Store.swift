@@ -342,10 +342,6 @@ final class Store {
         onChange?()
     }
 
-    var finishedCount: Int {
-        allSessions.filter { $0.state == .done }.count
-    }
-
     var idleCount: Int {
         sessions.filter { $0.state == .idle && !hasPending($0.id) }.count
     }

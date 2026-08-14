@@ -68,14 +68,6 @@ struct ConsoleView: View {
             Text("Claude sessions")
                 .font(.headline)
             Spacer()
-            if store.finishedCount > 0 {
-                Label("\(store.finishedCount) finished", systemImage: "checkmark")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Color.green.opacity(0.22), in: Capsule())
-            }
             if !store.pending.isEmpty {
                 Text("\(store.pending.count)")
                     .font(.caption.bold())

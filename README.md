@@ -44,8 +44,6 @@ Below that, every live session:
 | **idle** | grey — quiet |
 | **running** | faint — a live process that hasn't reported in yet |
 
-The header counts how many have finished, so you can see an agent is done without reading the list.
-
 | Button | Effect |
 | :-- | :-- |
 | Claude's own options | Answers the prompt with that choice |
