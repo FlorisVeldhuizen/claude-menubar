@@ -5,7 +5,8 @@ import Foundation
 enum Persistence {
     /// Keyed by project directory, not session: session ids are new every run, so a session-keyed
     /// rule could never match again.
-    static func ruleKey(cwd: String, tool: String) -> String { "\(cwd)|\(tool)" }
+    /// An empty scope is the tool-wide rule, kept for tools whose arguments say nothing useful.
+    static func ruleKey(cwd: String, tool: String, scope: String) -> String { "\(cwd)|\(tool)|\(scope)" }
 
     static func loadRules() -> Set<String> {
         guard let list: [String] = read(from: rulesURL) else { return [] }

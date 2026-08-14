@@ -242,14 +242,14 @@ struct RequestCard: View {
 
     private var actionRow: some View {
         HStack(spacing: 6) {
-            // Only where Claude offers nothing better. Its own "don't ask again" is scoped to the
-            // command; ours covers every call of that tool in the project, so it must not compete.
-            if request.gated, choices == nil {
-                Button("Always allow \(request.toolName)") {
+            // Only where Claude offers nothing better: its own "don't ask again" is already in a
+            // mirrored menu. A nil scope is a command that builds itself, which gets no rule at all.
+            if request.gated, choices == nil, request.scopes != nil {
+                Button("Always allow \(request.scopeLabel)") {
                     store.answer(request, key: .option(1), remember: true)
                 }
                 .controlSize(.small)
-                .help("Allow every \(request.toolName) call in \(request.folder) from here on, without asking")
+                .help(ruleHelp)
             }
             if choices == nil {
                 Button("Say why…", action: toggleNote)
@@ -318,6 +318,15 @@ struct RequestCard: View {
         var height = Layout.detailBox - CGFloat(reservedRows) * Layout.answerRow
         if noteTarget == request.id { height -= Layout.noteRow }
         return max(height, Layout.smallestDetail)
+    }
+
+    private var ruleHelp: String {
+        guard let scopes = request.scopes, !scopes.isEmpty else {
+            return "Allow every \(request.toolName) call in \(request.folder) from here on, without asking"
+        }
+        let list = scopes.map { "\"\($0)\"" }.joined(separator: " and ")
+        return "Allow \(list) in \(request.folder) from here on, without asking. "
+            + "Other \(request.toolName) calls still ask."
     }
 
     private func toggleNote() {

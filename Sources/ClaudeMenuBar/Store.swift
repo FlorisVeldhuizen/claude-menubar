@@ -97,7 +97,7 @@ final class Store {
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
         if reachable || Self.alwaysSafe.contains(tool) { return DecisionResult(decision: .ask, message: nil) }
-        if autoAllow.contains(Persistence.ruleKey(cwd: project ?? "", tool: tool)) {
+        if allowedAlready(tool: tool, project: project ?? "", input: event.toolInput) {
             return DecisionResult(decision: .allow, message: nil)
         }
 
@@ -111,7 +111,8 @@ final class Store {
             context: Transcript.lastAssistantText(path: event.transcriptPath),
             questions: PendingRequest.questions(from: event.toolInput),
             permissionLevel: event.permissionLevel,
-            receivedAt: Date()
+            receivedAt: Date(),
+            scopes: PendingRequest.scopes(for: tool, input: event.toolInput)
         )
         request.gated = true
         note(event, for: sessionId)
@@ -254,7 +255,7 @@ final class Store {
         note(event, for: sessionId)
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
-        if autoAllow.contains(Persistence.ruleKey(cwd: project ?? "", tool: tool)) {
+        if allowedAlready(tool: tool, project: project ?? "", input: event.toolInput) {
             return DecisionResult(decision: .allow, message: nil)
         }
 
@@ -270,7 +271,8 @@ final class Store {
             context: Transcript.lastAssistantText(path: event.transcriptPath),
             questions: PendingRequest.questions(from: event.toolInput),
             permissionLevel: event.permissionLevel,
-            receivedAt: Date()
+            receivedAt: Date(),
+            scopes: PendingRequest.scopes(for: tool, input: event.toolInput)
         )
         pending.removeAll { $0.sessionId == sessionId && $0.toolName == tool }
         pending.append(request)
@@ -283,10 +285,7 @@ final class Store {
 
     /// Answer the prompt in the terminal. Waits for it to be drawn if it isn't yet.
     func answer(_ request: PendingRequest, key: TerminalKey, remember: Bool = false) {
-        if remember {
-            autoAllow.insert(Persistence.ruleKey(cwd: request.cwd, tool: request.toolName))
-            Persistence.saveRules(autoAllow)
-        }
+        if remember { rememberRule(for: request) }
         notice = nil
         answered[request.sessionId] = request
         pending.removeAll { $0.id == request.id }
@@ -411,6 +410,24 @@ final class Store {
     func releaseAll() {
         pending.removeAll()
         onChange?()
+    }
+
+    /// A rule covers the command, so every part of a chained one has to be covered before it passes.
+    private func allowedAlready(tool: String, project: String, input: [String: JSONValue]?) -> Bool {
+        if autoAllow.contains(Persistence.ruleKey(cwd: project, tool: tool, scope: "")) { return true }
+        guard let scopes = PendingRequest.scopes(for: tool, input: input), !scopes.isEmpty else { return false }
+        return scopes.allSatisfy {
+            autoAllow.contains(Persistence.ruleKey(cwd: project, tool: tool, scope: $0))
+        }
+    }
+
+    private func rememberRule(for request: PendingRequest) {
+        let scopes = request.scopes ?? []
+        for scope in scopes.isEmpty ? [""] : scopes {
+            autoAllow.insert(Persistence.ruleKey(cwd: request.cwd, tool: request.toolName, scope: scope))
+        }
+        Persistence.saveRules(autoAllow)
+        Log.write("RULE", "always allow \(request.toolName) \(scopes.joined(separator: ", ")) in \(request.folder)")
     }
 
     func clearAutoAllow() {

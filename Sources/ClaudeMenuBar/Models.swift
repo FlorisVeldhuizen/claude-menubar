@@ -200,6 +200,14 @@ struct PendingRequest: Identifiable {
     var terminalOptions: [MenuOption] = []
     /// True when the session cannot be reached by keystroke, so the answer goes back through the hook.
     var gated = false
+    /// What an always-allow rule from this card would cover. nil where none is offered.
+    var scopes: [String]? = []
+
+    /// Names the rule on the button, in the prompt's own terms.
+    var scopeLabel: String {
+        guard let scopes, let first = scopes.first else { return toolName }
+        return scopes.count == 1 ? "\(first)" : "\(first) +\(scopes.count - 1)"
+    }
 
     var folder: String {
         cwd.isEmpty ? "unknown" : (cwd as NSString).lastPathComponent
@@ -215,6 +223,48 @@ struct PendingRequest: Identifiable {
         let index = option - 1
         guard terminalOptions.indices.contains(index), let was = terminalOptions[index].ticked else { return }
         terminalOptions[index].ticked = !was
+    }
+
+    /// What an "always allow" here would cover, in the terms the prompt itself uses: the command,
+    /// not the whole tool. Empty means the arguments say nothing useful, so only a tool-wide rule is
+    /// on offer. nil means don't offer one at all.
+    static func scopes(for tool: String, input: [String: JSONValue]?) -> [String]? {
+        switch tool {
+        case "Bash":
+            guard let command = input?["command"]?.stringValue else { return [] }
+            // A command that builds itself can hide anything inside, so it gets no rule.
+            guard !command.contains("$("), !command.contains("`") else { return nil }
+            let parts = command
+                .replacingOccurrences(of: "&&", with: "\n")
+                .replacingOccurrences(of: "||", with: "\n")
+                .replacingOccurrences(of: ";", with: "\n")
+                .replacingOccurrences(of: "|", with: "\n")
+                .split(separator: "\n")
+            let prefixes = parts.compactMap { commandPrefix(String($0)) }
+            guard prefixes.count == parts.count else { return nil }
+            return Array(Set(prefixes)).sorted()
+        case "Read", "Write", "Edit", "NotebookEdit":
+            guard let path = (input?["file_path"] ?? input?["filePath"])?.display, !path.isEmpty else { return [] }
+            return [(path as NSString).deletingLastPathComponent]
+        case "WebFetch":
+            guard let url = input?["url"]?.stringValue, let host = URL(string: url)?.host else { return [] }
+            return [host]
+        default:
+            return []
+        }
+    }
+
+    /// Claude Code scopes its own rule to a command family, so ours matches: the program, plus its
+    /// subcommand where the program is one that takes them.
+    private static let subcommanded: Set<String> = [
+        "git", "gh", "npm", "pnpm", "yarn", "cargo", "brew", "docker", "kubectl", "swift", "uv", "pip",
+    ]
+
+    private static func commandPrefix(_ segment: String) -> String? {
+        let words = segment.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let program = words.first, !program.isEmpty, !program.contains("=") else { return nil }
+        guard subcommanded.contains(program), words.count > 1, !words[1].hasPrefix("-") else { return program }
+        return "\(program) \(words[1])"
     }
 
     /// The one field that matters per tool, so the card shows the decision-relevant text.

@@ -63,11 +63,15 @@ card with no menu yet, and `⌘K` opens the message field. Command digits rather
 typing into that field still works. With several decisions waiting, the header becomes one chip per
 project; click one or use `⌘[` / `⌘]` to switch.
 
-**Always allow \<tool\>** appears only where Claude offers no "don't ask again" of its own — that is,
-on gated cards that aren't questions. Claude's version is scoped to the command and is already in the
-mirrored menu; ours covers every call of that tool in the project, so it stays out of the way.
-It's kept in `~/Library/Application Support/ClaudeMenuBar/always-allow.json` rather than your Claude
-permission rules, and clears from the `⋯` menu.
+**Always allow `git add`** appears only where Claude offers no "don't ask again" of its own — that
+is, on gated cards that aren't questions, since Claude's own version is already in the mirrored menu.
+
+It is scoped the way the prompt is, not by tool: a command gives its program and subcommand, a file
+tool gives the directory, a fetch gives the host. A chained command remembers every part, and a later
+call passes only if all of its parts are covered. A command that builds itself with `$( )` or
+backticks gets no rule offered at all. Rules are per project and kept in
+`~/Library/Application Support/ClaudeMenuBar/always-allow.json` rather than your Claude permission
+rules, and clear from the `⋯` menu.
 
 ## How it works
 
