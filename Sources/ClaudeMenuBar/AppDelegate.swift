@@ -45,6 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// The backstop for a click the popover did not see: whatever you clicked took the app with it.
+    func applicationDidResignActive(_ notification: Notification) {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         store.releaseAll()
         server?.stop()
@@ -183,6 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // width the badge is held in reserve on.
             let anchor = button.bounds.offsetBy(dx: CrabIcon.anchorOffset, dy: 0)
             popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
+            // Active, not merely key. A transient popover closes itself on the first event outside it,
+            // and an accessory app that is not active never sees the click that went to another app.
+            NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
             store.panelOpen = true
             store.verifyPending()
