@@ -35,8 +35,13 @@ enum CrabIcon {
     private static let height: CGFloat = 18
     private static let left: CGFloat = 1
 
-    /// The badge sits to one side, so the popover has to be anchored on the crab and not the item.
-    static var anchorOffset: CGFloat { left + columns * unit / 2 - width / 2 }
+    /// Where to point the popover: the badge sits to one side, so the middle of the item is not the
+    /// middle of the crab. A sliver rather than the item shifted over, since a positioning rect that
+    /// hangs outside the button is clipped back to it, and the arrow moves with it.
+    static func anchor(in bounds: NSRect) -> NSRect {
+        let middle = bounds.midX + left + columns * unit / 2 - width / 2
+        return NSRect(x: middle - 1, y: bounds.minY, width: 2, height: bounds.height)
+    }
 
     /// The count is punched out of the icon so the item stays one snug fixed width.
     static func statusImage(count: Int, badge: CGFloat = 1) -> NSImage {
