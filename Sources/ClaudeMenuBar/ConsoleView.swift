@@ -59,12 +59,17 @@ struct ConsoleView: View {
 
     static let size = CGSize(width: 420, height: 580)
 
+    private enum Layout {
+        static let slot: CGFloat = 286
+        static let strip: CGFloat = 18
+    }
+
     // MARK: - Header / footer
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkle")
-                .foregroundStyle(.tint)
+                .foregroundStyle(store.pending.isEmpty ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.orange))
             Text("Claude sessions")
                 .font(.headline)
             Spacer()
@@ -75,6 +80,7 @@ struct ConsoleView: View {
                     .padding(.vertical, 2)
                     .background(Color.orange, in: Capsule())
                     .foregroundStyle(.black)
+                    .help("\(store.pending.count) waiting on you")
             }
         }
         .padding(.horizontal, 12)
@@ -116,32 +122,38 @@ struct ConsoleView: View {
     private var requestSlot: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let notice = store.notice {
-                Text(notice)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
-                    .padding(.horizontal, 12)
-                    .frame(height: 18)
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(notice).lineLimit(1)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+                .help(notice)
+                .padding(.horizontal, 12)
+                .frame(height: Layout.strip)
             } else if store.pending.count > 1 {
                 queueChips
             } else {
-                HStack { section("Waiting on you"); Spacer() }.frame(height: 18)
+                HStack { section("Waiting on you"); Spacer() }.frame(height: Layout.strip)
             }
 
             if let request = store.activeRequest {
-                RequestCard(store: store, request: request, noteTarget: $noteTarget, noteText: $noteText)
+                RequestCard(store: store, request: request, now: now, noteTarget: $noteTarget, noteText: $noteText)
                     .id(request.id)
                     .transition(.opacity)
             } else {
-                Text("Nothing needs a decision.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                VStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.title2)
+                    Text("Nothing needs a decision.")
+                        .font(.callout)
+                }
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(.vertical, 10)
-        .frame(minHeight: 286, alignment: .top)
+        .frame(minHeight: Layout.slot, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.easeInOut(duration: 0.18), value: store.activeRequest?.id)
     }
@@ -162,13 +174,17 @@ struct ConsoleView: View {
                                 active ? Color.orange.opacity(0.30) : Color.primary.opacity(0.07),
                                 in: Capsule()
                             )
+                            .overlay(Capsule().stroke(Color.orange.opacity(active ? 0.55 : 0)))
                     }
                     .buttonStyle(.plain)
+                    .clickable()
+                    .help("\(request.toolName) in \(request.folder)")
                 }
             }
             .padding(.horizontal, 12)
         }
-        .frame(height: 18)
+        .frame(height: Layout.strip)
+        .help("Click a project, or press ⌘[ and ⌘] to switch")
     }
 
     private var installBanner: some View {
@@ -209,9 +225,12 @@ struct ConsoleView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.folder)
                     .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(session.agentType.map { "\(session.state.label) · \($0)" } ?? session.state.label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             if waiting > 1 {
@@ -238,6 +257,7 @@ struct ConsoleView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
+                    .clickable()
                     .help("Remove from the list")
                 }
             }
@@ -251,6 +271,7 @@ struct ConsoleView: View {
         )
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
+        .clickable()
         .onHover { hoveredSession = $0 ? session.id : nil }
         .onTapGesture {
             if waiting > 0 {

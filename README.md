@@ -53,8 +53,10 @@ Below that, every live session:
 Answering never pulls a session to the front — that's the point. Focus moves only via **Terminal**,
 the card's header, or clicking a session with no pending request.
 
-With several decisions waiting, the header becomes one chip per project; click one or use `⌘[` /
-`⌘]` to switch.
+Every answer has a key. `⌘1` to `⌘9` pick the numbered options, `⌘↩` allows and `⌘D` denies on a
+card with no menu yet, and `⌘K` opens the message field. Command digits rather than plain ones, so
+typing into that field still works. With several decisions waiting, the header becomes one chip per
+project; click one or use `⌘[` / `⌘]` to switch.
 
 **Always allow \<tool\>** appears only where Claude offers no "don't ask again" of its own — that is,
 on gated cards that aren't questions. Claude's version is scoped to the command and is already in the

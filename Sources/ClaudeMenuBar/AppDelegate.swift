@@ -263,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     static let soundNames = ["Pop", "Purr", "Bottle", "Glass", "Submarine", "Ping", "Hero", "Tink", "None"]
 
     private static var soundName: String {
-        get { UserDefaults.standard.string(forKey: "sound") ?? "Pop" }
+        get { UserDefaults.standard.string(forKey: "sound") ?? "Purr" }
         set { UserDefaults.standard.set(newValue, forKey: "sound") }
     }
 

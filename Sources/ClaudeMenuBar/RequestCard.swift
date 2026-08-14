@@ -4,15 +4,83 @@ import SwiftUI
 struct RequestCard: View {
     let store: Store
     let request: PendingRequest
+    let now: Date
     @Binding var noteTarget: String?
     @Binding var noteText: String
 
-    var body: some View {
-        card
+    private enum Layout {
+        static let detailBox: CGFloat = 150
+        static let answerRow: CGFloat = 26
+        static let noteRow: CGFloat = 54
+        static let smallestDetail: CGFloat = 60
+        /// Claude's own menu is usually three lines. Holding that much room from the start means the
+        /// card doesn't reshuffle when the real options arrive a few seconds later.
+        static let expectedOptions = 3
+        /// Past this the menu is not coming, so the card offers the plain guess instead of waiting.
+        static let menuGiveUp: TimeInterval = 9
     }
 
-private var card: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    private struct Answer: Identifiable {
+        let id: Int
+        let label: String
+        let key: TerminalKey
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            titleRow
+            detailBox
+            answerRows
+            actionRow
+            if noteTarget == request.id { noteRow }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
+        .padding(.horizontal, 12)
+        .background { shortcuts }
+    }
+
+    // MARK: - Answers
+
+    /// The options this card can answer with, in the order they are numbered on screen.
+    private var answers: [Answer] {
+        if request.gated, let question = choices {
+            return question.options.enumerated().map { index, option in
+                Answer(id: index, label: option.label, key: .reply(
+                    "The user answered \"\(question.text)\" with: \(option.label). "
+                    + "Continue with that choice and do not ask again."
+                ))
+            }
+        }
+        if !request.gated {
+            return request.terminalOptions.enumerated().map { index, label in
+                Answer(id: index, label: label, key: .option(index + 1))
+            }
+        }
+        return []
+    }
+
+    /// A single question with options is answerable here; anything else takes the plain allow/deny row.
+    private var choices: AskQuestion? {
+        guard request.questions.count == 1, let question = request.questions.first,
+              !question.options.isEmpty
+        else { return nil }
+        return question
+    }
+
+    /// Command digits rather than plain ones, so typing into the note field still works.
+    private var shortcuts: some View {
+        ForEach(answers.prefix(9)) { answer in
+            Button("") { store.answer(request, key: answer.key) }
+                .keyboardShortcut(KeyEquivalent(Character("\(answer.id + 1)")), modifiers: .command)
+                .hidden()
+        }
+    }
+
+    // MARK: - Parts
+
+    private var titleRow: some View {
         HStack(spacing: 6) {
             Text(request.toolName)
                 .font(.subheadline.weight(.semibold))
@@ -28,14 +96,19 @@ private var card: some View {
             Text(request.folder)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Image(systemName: "arrow.up.forward.app")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
+        .clickable()
         .onTapGesture { store.jump(toSessionOf: request) }
         .help("Jump to this session")
+    }
 
+    private var detailBox: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 if !request.context.isEmpty {
@@ -61,87 +134,105 @@ private var card: some View {
             }
             .padding(7)
         }
-        .frame(height: detailHeight(for: request))
+        .frame(height: detailHeight)
         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
 
-        if request.gated, let question = choices(in: request) {
-            VStack(spacing: 4) {
-                ForEach(question.options) { option in
-                    Button {
-                        store.answer(request, key: .reply(
-                            "The user answered \"\(question.text)\" with: \(option.label). "
-                            + "Continue with that choice and do not ask again."
-                        ))
-                    } label: {
-                        Text(option.label).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .controlSize(.small)
-                }
-                // Claude Code appends this to its own menu; a gated card only sees the declared options.
+    @ViewBuilder private var answerRows: some View {
+        Group {
+            if !answers.isEmpty {
+                optionButtons
+            } else if request.gated {
+                pairRow(allow: "Allow", deny: "Deny", note: "answered here · no terminal to reach")
+            } else if now.timeIntervalSince(request.receivedAt) > Layout.menuGiveUp {
+                pairRow(allow: "Yes", deny: "No", note: "no menu on screen — this answers 1 or Esc")
+            } else {
+                waitingRows
+            }
+        }
+        .frame(minHeight: CGFloat(reservedRows) * Layout.answerRow, alignment: .top)
+        .animation(.easeInOut(duration: 0.15), value: request.terminalOptions)
+    }
+
+    private var optionButtons: some View {
+        VStack(spacing: 4) {
+            ForEach(answers) { answer in
                 Button {
-                    noteText = ""
-                    noteTarget = noteTarget == request.id ? nil : request.id
+                    store.answer(request, key: answer.key)
                 } label: {
+                    Text("\(answer.id + 1). \(answer.label)")
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .controlSize(.small)
+                .help(answer.id < 9 ? "⌘\(answer.id + 1)" : answer.label)
+            }
+            // Claude Code appends this to its own menu; a gated card only sees the declared options.
+            if request.gated {
+                Button(action: toggleNote) {
                     Text("Chat about this…")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .controlSize(.small)
-            }
-        } else if request.gated {
-            HStack(spacing: 6) {
-                Button("Allow") { store.answer(request, key: .option(1)) }
-                    .controlSize(.small)
-                    .keyboardShortcut(.defaultAction)
-                Button("Deny") { store.answer(request, key: .cancel) }
-                    .controlSize(.small)
-                Text("answered here · no terminal to reach")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        } else if !request.terminalOptions.isEmpty {
-            VStack(spacing: 4) {
-                ForEach(Array(request.terminalOptions.enumerated()), id: \.offset) { index, label in
-                    Button {
-                        store.answer(request, key: .option(index + 1))
-                    } label: {
-                        Text("\(index + 1). \(label)")
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .controlSize(.small)
-                }
-            }
-        } else {
-            HStack(spacing: 6) {
-                Button("Yes") { store.answer(request, key: .option(1)) }
-                    .controlSize(.small)
-                    .keyboardShortcut(.defaultAction)
-                Button("No") { store.answer(request, key: .cancel) }
-                    .controlSize(.small)
-                Text("waiting for the prompt")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                .keyboardShortcut("k", modifiers: .command)
+                .help("⌘K")
             }
         }
+    }
 
+    /// Claude draws its menu about six seconds after the hook, and the buttons must mirror it exactly.
+    /// So the card holds the space and says so, rather than showing a guess it has to replace.
+    private var waitingRows: some View {
+        VStack(spacing: 4) {
+            ForEach(0..<Layout.expectedOptions, id: \.self) { row in
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.primary.opacity(0.05))
+                    .frame(height: Layout.answerRow - 4)
+                    .overlay(alignment: .leading) {
+                        if row == 0 {
+                            Text("Waiting for Claude's menu…")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 7)
+                        }
+                    }
+            }
+        }
+    }
+
+    private func pairRow(allow: String, deny: String, note: String) -> some View {
+        HStack(spacing: 6) {
+            Button(allow) { store.answer(request, key: .option(1)) }
+                .controlSize(.small)
+                .keyboardShortcut(.defaultAction)
+                .help("⌘↩")
+            Button(deny) { store.answer(request, key: .cancel) }
+                .controlSize(.small)
+                .keyboardShortcut("d", modifiers: .command)
+                .help("⌘D")
+            Text(note)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var actionRow: some View {
         HStack(spacing: 6) {
             // Only where Claude offers nothing better. Its own "don't ask again" is scoped to the
             // command; ours covers every call of that tool in the project, so it must not compete.
-            if request.gated, choices(in: request) == nil {
+            if request.gated, choices == nil {
                 Button("Always allow \(request.toolName)") {
                     store.answer(request, key: .option(1), remember: true)
                 }
                 .controlSize(.small)
                 .help("Allow every \(request.toolName) call in \(request.folder) from here on, without asking")
             }
-            if choices(in: request) == nil {
-                Button("Say why…") {
-                    noteText = ""
-                    noteTarget = noteTarget == request.id ? nil : request.id
-                }
-                .controlSize(.small)
-                .help("Cancel the prompt and send Claude a message instead")
+            if choices == nil {
+                Button("Say why…", action: toggleNote)
+                    .controlSize(.small)
+                    .keyboardShortcut("k", modifiers: .command)
+                    .help("⌘K · cancel the prompt and send Claude a message instead")
             }
             Spacer()
             if !request.gated {
@@ -150,68 +241,69 @@ private var card: some View {
                     .help("Jump to that pane; the card stays until the prompt is settled")
             }
         }
+    }
 
-        if noteTarget == request.id {
-            HStack(spacing: 6) {
-                TextField(request.gated ? "Say what you want instead…" : "Tell Claude what to do instead…", text: $noteText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.caption)
-                    .onSubmit { sendNote(request) }
-                Button("Send") { sendNote(request) }
-                    .controlSize(.small)
-            }
+    private var noteRow: some View {
+        HStack(spacing: 6) {
+            TextField(request.gated ? "Say what you want instead…" : "Tell Claude what to do instead…", text: $noteText)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+                .onSubmit(sendNote)
+            Button("Send", action: sendNote)
+                .controlSize(.small)
         }
     }
-    .padding(10)
-    .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
-    .padding(.horizontal, 12)
-}
 
-/// A single question with options is answerable here; anything else takes the plain allow/deny row.
-private func choices(in request: PendingRequest) -> AskQuestion? {
-    guard request.questions.count == 1, let question = request.questions.first,
-          !question.options.isEmpty
-    else { return nil }
-    return question
-}
+    private func questionBlock(_ question: AskQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(question.text)
+                .font(.caption.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
 
-private func detailHeight(for request: PendingRequest) -> CGFloat {
-    var height: CGFloat = 150
-    if noteTarget == request.id { height -= 54 }
-    height -= CGFloat(max(request.terminalOptions.count, 1)) * 26
-    return max(height, 60)
-}
-
-private func questionBlock(_ question: AskQuestion) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-        Text(question.text)
-            .font(.caption.weight(.semibold))
-            .fixedSize(horizontal: false, vertical: true)
-
-        ForEach(question.options) { option in
-            HStack(alignment: .top, spacing: 6) {
-                Text("•").font(.caption).foregroundStyle(.tertiary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(option.label)
-                        .font(.caption.weight(.medium))
-                    if !option.detail.isEmpty {
-                        Text(option.detail)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+            ForEach(question.options) { option in
+                HStack(alignment: .top, spacing: 6) {
+                    Text("•").font(.caption).foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(option.label)
+                            .font(.caption.weight(.medium))
+                        if !option.detail.isEmpty {
+                            Text(option.detail)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-}
 
-private func sendNote(_ request: PendingRequest) {
-    let text = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-    store.answer(request, key: text.isEmpty ? .cancel : .cancelThenSay(text))
-    noteTarget = nil
-    noteText = ""
-}
+    // MARK: - Sizing and actions
+
+    /// A gated card never changes shape, so it only reserves what it shows. A terminal one holds room
+    /// for the menu it is about to mirror, so nothing moves when that menu arrives.
+    private var reservedRows: Int {
+        guard request.gated else { return max(answers.count, Layout.expectedOptions) }
+        return max(answers.count, 1) + (choices == nil ? 0 : 1)
+    }
+
+    /// The card sits in a fixed slot, so the detail box gives up whatever the answer rows need.
+    private var detailHeight: CGFloat {
+        var height = Layout.detailBox - CGFloat(reservedRows) * Layout.answerRow
+        if noteTarget == request.id { height -= Layout.noteRow }
+        return max(height, Layout.smallestDetail)
+    }
+
+    private func toggleNote() {
+        noteText = ""
+        noteTarget = noteTarget == request.id ? nil : request.id
+    }
+
+    private func sendNote() {
+        let text = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.answer(request, key: text.isEmpty ? .cancel : .cancelThenSay(text))
+        noteTarget = nil
+        noteText = ""
+    }
 }

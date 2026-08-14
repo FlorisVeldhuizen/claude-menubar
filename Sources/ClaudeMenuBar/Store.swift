@@ -13,13 +13,13 @@ final class Store {
     private(set) var autoAllow: Set<String> = []
     var hooksInstalled = false
     private(set) var focusedRequestId: String?
+    private(set) var notice: String?
 
     /// The request shown in the slot: whichever session you picked, else the oldest.
     var activeRequest: PendingRequest? {
         if let id = focusedRequestId, let request = pending.first(where: { $0.id == id }) { return request }
         return pending.first
     }
-
 
     func focus(requestId: String) {
         focusedRequestId = requestId
@@ -110,7 +110,6 @@ final class Store {
         Log.write("GATE", "released \(id) as \(decision.rawValue)")
         continuation.resume(returning: DecisionResult(decision: decision, message: message))
     }
-    private(set) var notice: String?
 
     func pane(for sessionId: String) -> String? { panes[sessionId] }
 
@@ -329,7 +328,6 @@ final class Store {
         }
     }
 
-
     func dismiss(_ sessionId: String) {
         sessions.removeAll { $0.id == sessionId }
         onChange?()
@@ -459,5 +457,4 @@ final class Store {
             ))
         }
     }
-
 }

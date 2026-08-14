@@ -43,6 +43,8 @@ echo "Run it with: open \"$APP\""
 
 if [ "${1:-}" = "--install" ]; then
     DEST="/Applications/$APP_NAME.app"
+    # Without this the old copy keeps running and holds the port, so the new one dies on launch.
+    pkill -f "$DEST/Contents/MacOS/ClaudeMenuBar" 2>/dev/null && sleep 1 || true
     rm -rf "$DEST"
     cp -R "$APP" "$DEST"
     open "$DEST"
