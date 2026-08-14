@@ -34,19 +34,37 @@ struct RequestCard: View {
         var ticked: Bool?
     }
 
+    @State private var landed = false
+
     var body: some View {
+        stack
+            .padding(10)
+            .background(Color.orange.opacity(landed ? 0.10 : 0.20), in: Self.shape)
+            .overlay(Self.shape.strokeBorder(Color.orange.opacity(landed ? 0.35 : 0.75)))
+            .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+            .padding(.horizontal, 12)
+            .background { shortcuts }
+            .animation(Motion.card, value: noteTarget)
+            // A card that lands while you are looking elsewhere gets one beat of extra colour.
+            .onAppear {
+                landed = false
+                withAnimation(.easeOut(duration: 0.55).delay(0.10)) { landed = true }
+            }
+    }
+
+    private static let shape = RoundedRectangle(cornerRadius: 8)
+
+    private var stack: some View {
         VStack(alignment: .leading, spacing: 8) {
             titleRow
             detailBox
             answerRows
             actionRow
-            if noteTarget == request.id { noteRow }
+            if noteTarget == request.id {
+                noteRow
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
-        .padding(.horizontal, 12)
-        .background { shortcuts }
     }
 
     // MARK: - Answers
@@ -152,6 +170,7 @@ struct RequestCard: View {
         }
         .frame(height: detailHeight)
         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        .animation(Motion.card, value: detailHeight)
     }
 
     @ViewBuilder private var answerRows: some View {
@@ -167,7 +186,8 @@ struct RequestCard: View {
             }
         }
         .frame(minHeight: CGFloat(reservedRows) * Layout.answerRow, alignment: .top)
-        .animation(.easeInOut(duration: 0.15), value: request.terminalOptions)
+        .animation(Motion.card, value: request.terminalOptions)
+        .animation(Motion.card, value: request.gated)
     }
 
     private var optionButtons: some View {
@@ -180,32 +200,29 @@ struct RequestCard: View {
                         if let ticked = answer.ticked {
                             Image(systemName: ticked ? "checkmark.square.fill" : "square")
                                 .foregroundStyle(ticked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                                .contentTransition(.symbolEffect(.replace))
                         }
                         Text("\(answer.id + 1). \(answer.label)")
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .controlSize(.small)
+                .buttonStyle(AnswerButtonStyle())
+                .transition(.opacity)
                 .help(answer.id < 9 ? "⌘\(answer.id + 1)" : answer.label)
             }
             // A tick list stays on screen until Return, so the card has to offer that key too.
             if request.isTickList {
                 Button("Submit") { store.submit(request) }
-                    .controlSize(.small)
+                    .buttonStyle(AnswerButtonStyle(kind: .primary))
                     .keyboardShortcut(.defaultAction)
                     .help("⌘↩ · send the ticked options")
             }
             // Claude Code appends this to its own menu; a gated card only sees the declared options.
             if request.gated {
-                Button(action: toggleNote) {
-                    Text("Chat about this…")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .controlSize(.small)
-                .keyboardShortcut("k", modifiers: .command)
-                .help("⌘K")
+                Button("Chat about this…", action: toggleNote)
+                    .buttonStyle(AnswerButtonStyle(kind: .quiet))
+                    .keyboardShortcut("k", modifiers: .command)
+                    .help("⌘K")
             }
         }
     }
@@ -226,6 +243,7 @@ struct RequestCard: View {
                                 .padding(.horizontal, 7)
                         }
                     }
+                    .shimmer(cornerRadius: 5, delay: Double(row) * 0.16)
             }
         }
     }

@@ -116,13 +116,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func refreshStatusItem() {
         store.hooksInstalled = HookInstaller.isInstalled(port: Self.port)
         let count = store.pending.count
-        statusItem.button?.image = Self.statusImage(count: count)
+        drawStatusIcon(count: count)
         statusItem.button?.toolTip = count > 0 ? "\(count) waiting on you" : "Claude sessions"
         if count == 0, popover.isShown, store.sessions.isEmpty { popover.performClose(nil) }
     }
 
+    private func drawStatusIcon(count: Int) {
+        statusItem.button?.image = Self.statusImage(count: count, badge: badgeScale)
+    }
+
+    private var badgeScale: CGFloat = 1
+    private var badgePop: Timer?
+    private var badgeFrame = 0
+
+    /// Frames rather than a curve: an NSImage cannot tween, so the pop is drawn one step at a time.
+    private static let badgeFrames: [CGFloat] = [0.2, 0.7, 1.08, 1.22, 1.14, 1.05, 1.0]
+
+    /// A new request has to catch your eye up in the menu bar, so the dot lands with one pop.
+    private func popBadge() {
+        badgePop?.invalidate()
+        guard !Motion.reduced else { return }
+        badgeFrame = 0
+        badgePop = Timer.scheduledTimer(withTimeInterval: 1.0 / 40.0, repeats: true) { timer in
+            Task { @MainActor in
+                guard self.badgeFrame < Self.badgeFrames.count else {
+                    timer.invalidate()
+                    self.badgeScale = 1
+                    self.drawStatusIcon(count: self.store.pending.count)
+                    return
+                }
+                self.badgeScale = Self.badgeFrames[self.badgeFrame]
+                self.badgeFrame += 1
+                self.drawStatusIcon(count: self.store.pending.count)
+            }
+        }
+    }
+
     /// The count is punched out of the icon so the item stays one snug fixed width.
-    private static func statusImage(count: Int) -> NSImage {
+    private static func statusImage(count: Int, badge: CGFloat = 1) -> NSImage {
         let size = NSSize(width: 24, height: 18)
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         guard let symbol = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Claude sessions")?
@@ -137,8 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // A digit this small is unreadable over the glyph, so the badge is just a dot.
             // The count itself lives in the tooltip and the panel.
             let centre = NSPoint(x: 18.5, y: 13.5)
-            let dot = NSRect(x: centre.x - 3.5, y: centre.y - 3.5, width: 7, height: 7)
-            let gap = dot.insetBy(dx: -1.75, dy: -1.75)
+            let radius = 3.5 * max(badge, 0.01)
+            let dot = NSRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
+            let gap = dot.insetBy(dx: -radius / 2, dy: -radius / 2)
 
             NSGraphicsContext.current?.compositingOperation = .destinationOut
             NSBezierPath(ovalIn: gap).fill()
@@ -154,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// A transient popover also closes on its own, so the flag can't be left set by the toggle alone.
     func popoverDidClose(_ notification: Notification) {
         store.panelOpen = false
+        statusItem.button?.highlight(false)
     }
 
     @objc private func statusItemClicked() {
@@ -169,7 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if popover.isShown {
             popover.performClose(nil)
             store.panelOpen = false
+            button.highlight(false)
         } else {
+            // The item reads as pressed for as long as its panel is up, the way every other one does.
+            button.highlight(true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             store.panelOpen = true
@@ -198,13 +234,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                      action: #selector(toggleHooks), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reveal settings.json", action: #selector(revealSettings), keyEquivalent: "").target = self
 
-        let soundItem = menu.addItem(withTitle: "Sound", action: nil, keyEquivalent: "")
+        let mute = menu.addItem(withTitle: "Mute alerts", action: #selector(toggleMute), keyEquivalent: "")
+        mute.target = self
+        mute.state = store.muted ? .on : .off
+
+        let soundItem = menu.addItem(withTitle: "Alert sound", action: nil, keyEquivalent: "")
         let sounds = NSMenu()
-        for name in Self.soundNames {
-            let item = sounds.addItem(withTitle: name, action: #selector(pickSound(_:)), keyEquivalent: "")
+        for name in Sound.names {
+            let title = name == Sound.silent ? "None — silent" : name
+            let item = sounds.addItem(withTitle: title, action: #selector(pickSound(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = name
-            item.state = name == Self.soundName ? .on : .off
+            item.state = name == store.alertSound ? .on : .off
         }
         soundItem.submenu = sounds
         let login = menu.addItem(withTitle: "Open at login", action: #selector(toggleLoginItem), keyEquivalent: "")
@@ -232,11 +273,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// Plays on selection so you can hear it before keeping it.
     @objc private func pickSound(_ item: NSMenuItem) {
         guard let name = item.representedObject as? String else { return }
-        Self.soundName = name
-        NSSound(named: name)?.play()
+        store.pickSound(name)
+    }
+
+    @objc private func toggleMute() {
+        store.toggleMute()
     }
 
     @objc private func revealSettings() {
@@ -280,15 +323,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    static let soundNames = ["Pop", "Purr", "Bottle", "Glass", "Submarine", "Ping", "Hero", "Tink", "None"]
-
-    private static var soundName: String {
-        get { UserDefaults.standard.string(forKey: "sound") ?? "Purr" }
-        set { UserDefaults.standard.set(newValue, forKey: "sound") }
-    }
-
     private func announce(_ request: PendingRequest) {
-        NSSound(named: Self.soundName)?.play()
+        Sound.play()
+        popBadge()
 
         guard notificationsReady, !popover.isShown else { return }
         let content = UNMutableNotificationContent()

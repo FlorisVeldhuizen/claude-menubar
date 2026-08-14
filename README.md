@@ -50,8 +50,9 @@ with no menu yet, and `⌘K` opens the message field. Command digits rather than
 into that field still works. With several decisions waiting, the header becomes one chip per project;
 click one or use `⌘[` / `⌘]` to switch.
 
-A new request plays a short sound. Right-click the menu bar icon → **Sound** to pick another; it
-plays as you select so you can hear it first, and **None** turns it off.
+A new request plays a short sound. The panel's **⋯** menu, and the right-click menu on the icon,
+both hold **Mute alerts** and an **Alert sound** list. A sound plays as you select it so you can hear
+it first, and unmuting returns you to the one you had.
 
 ### Sessions
 

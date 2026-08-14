@@ -497,6 +497,26 @@ final class Store {
         sessions.filter { $0.state == .idle && !hasPending($0.id) }.count
     }
 
+    // MARK: - Alert sound
+
+    private(set) var alertSound = Sound.current
+
+    var muted: Bool { alertSound == Sound.silent }
+
+    /// Plays on the way in, so you can hear a sound before keeping it.
+    func pickSound(_ name: String, preview: Bool = true) {
+        if name != Sound.silent { Sound.lastAudible = name }
+        Sound.current = name
+        alertSound = name
+        if preview { Sound.play(name) }
+        onChange?()
+    }
+
+    func toggleMute() {
+        let next = muted ? Sound.lastAudible : Sound.silent
+        pickSound(next, preview: next != Sound.silent)
+    }
+
     private func setState(_ sessionId: String, to state: SessionState) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
         sessions[index].state = state

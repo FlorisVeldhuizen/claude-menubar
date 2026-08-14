@@ -10,6 +10,7 @@ struct ConsoleView: View {
     @State private var noteText = ""
     @State private var hoveredSession: String?
     @State private var now = Date()
+    @Namespace private var chipSpace
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -25,6 +26,7 @@ struct ConsoleView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if !store.hooksInstalled {
                         installBanner
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
                     if store.allSessions.isEmpty {
@@ -39,12 +41,14 @@ struct ConsoleView: View {
                             section(group.title)
                             ForEach(group.sessions) { session in
                                 sessionRow(session)
+                                    .transition(.scale(scale: 0.97, anchor: .leading).combined(with: .opacity))
                             }
                         }
                     }
                 }
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(Motion.list, value: listShape)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .layoutPriority(-1)
@@ -67,27 +71,37 @@ struct ConsoleView: View {
         static let strip: CGFloat = 18
     }
 
+    /// What the list looks like right now. Rows animate when this changes, and not when a clock ticks.
+    private var listShape: String {
+        store.hooksInstalled.description
+            + store.allSessions.map { "\($0.id):\($0.state.rawValue)" }.joined(separator: ",")
+    }
+
     // MARK: - Header / footer
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkle")
                 .foregroundStyle(store.pending.isEmpty ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.orange))
+                .symbolEffect(.bounce, value: store.pending.count)
             Text("Claude sessions")
                 .font(.headline)
             Spacer()
             if !store.pending.isEmpty {
                 Text("\(store.pending.count)")
                     .font(.caption.bold())
+                    .contentTransition(.numericText())
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(Color.orange, in: Capsule())
                     .foregroundStyle(.black)
                     .help("\(store.pending.count) waiting on you")
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
         }
         .padding(.horizontal, 12)
         .frame(height: 38)
+        .animation(Motion.badge, value: store.pending.count)
     }
 
     private var footer: some View {
@@ -95,9 +109,12 @@ struct ConsoleView: View {
             Circle()
                 .fill(store.hooksInstalled ? Color.green : Color.orange)
                 .frame(width: 7, height: 7)
+                .animation(Motion.card, value: store.hooksInstalled)
             Text(store.hooksInstalled ? "Hooks active · :\(String(port))" : "Hooks not installed")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .contentTransition(.opacity)
+                .animation(Motion.card, value: store.hooksInstalled)
 
             Spacer()
 
@@ -107,11 +124,18 @@ struct ConsoleView: View {
                 Button("Reset always-allow (\(store.autoAllow.count))") { store.clearAutoAllow() }
                     .disabled(store.autoAllow.isEmpty)
                 Divider()
+                Toggle("Mute alerts", isOn: Binding(get: { store.muted }, set: { _ in store.toggleMute() }))
+                Picker("Alert sound", selection: Binding(get: { store.alertSound }, set: { store.pickSound($0) })) {
+                    ForEach(Sound.names, id: \.self) { name in
+                        Text(name == Sound.silent ? "None — silent" : name).tag(name)
+                    }
+                }
+                Divider()
                 Button(store.hooksInstalled ? "Remove hooks" : "Install hooks", action: onInstallHooks)
                 Divider()
                 Button("Quit", action: onQuit)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: store.muted ? "speaker.slash.circle" : "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -134,16 +158,23 @@ struct ConsoleView: View {
                 .help(notice)
                 .padding(.horizontal, 12)
                 .frame(height: Layout.strip)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             } else if store.pending.count > 1 {
                 queueChips
+                    .transition(.opacity)
             } else {
-                HStack { section("Waiting on you"); Spacer() }.frame(height: Layout.strip)
+                HStack { section("Waiting on you"); Spacer() }
+                    .frame(height: Layout.strip)
+                    .transition(.opacity)
             }
 
             if let request = store.activeRequest {
                 RequestCard(store: store, request: request, now: now, noteTarget: $noteTarget, noteText: $noteText)
                     .id(request.id)
-                    .transition(.opacity)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),
+                        removal: .opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+                    ))
             } else {
                 VStack(spacing: 6) {
                     Image(systemName: "checkmark.circle")
@@ -153,41 +184,64 @@ struct ConsoleView: View {
                 }
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity.combined(with: .scale(scale: 0.94)))
             }
         }
         .padding(.vertical, 10)
         .frame(minHeight: Layout.slot, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.easeInOut(duration: 0.18), value: store.activeRequest?.id)
+        .animation(Motion.card, value: store.activeRequest?.id)
+        .animation(Motion.card, value: store.notice)
+        .animation(Motion.card, value: store.pending.count > 1)
     }
 
     /// One chip per pending decision, so switching is a single click rather than hunting the list.
     private var queueChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(store.pending) { request in
-                    let active = store.activeRequest?.id == request.id
-                    Button { store.focus(requestId: request.id) } label: {
-                        Text(request.folder)
-                            .font(.caption2.weight(active ? .semibold : .regular))
-                            .lineLimit(1)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(
-                                active ? Color.orange.opacity(0.30) : Color.primary.opacity(0.07),
-                                in: Capsule()
-                            )
-                            .overlay(Capsule().stroke(Color.orange.opacity(active ? 0.55 : 0)))
+        ScrollViewReader { strip in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(store.pending) { request in
+                        chip(request)
                     }
-                    .buttonStyle(.plain)
-                    .clickable()
-                    .help("\(request.toolName) in \(request.folder)")
                 }
+                .padding(.horizontal, 12)
+                .animation(Motion.chip, value: store.activeRequest?.id)
             }
-            .padding(.horizontal, 12)
+            .onChange(of: store.activeRequest?.id) { _, id in
+                guard let id else { return }
+                withAnimation(Motion.chip) { strip.scrollTo(id, anchor: .center) }
+            }
         }
         .frame(height: Layout.strip)
         .help("Click a project, or press ⌘[ and ⌘] to switch")
+    }
+
+    private func chip(_ request: PendingRequest) -> some View {
+        let active = store.activeRequest?.id == request.id
+        return Button { store.focus(requestId: request.id) } label: {
+            Text(request.folder)
+                .font(.caption2.weight(active ? .semibold : .regular))
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background { chipBackground(active: active) }
+        }
+        .buttonStyle(.plain)
+        .clickable()
+        .id(request.id)
+        .help("\(request.toolName) in \(request.folder)")
+    }
+
+    @ViewBuilder private func chipBackground(active: Bool) -> some View {
+        ZStack {
+            Capsule().fill(Color.primary.opacity(0.07))
+            if active {
+                Capsule()
+                    .fill(Color.orange.opacity(0.30))
+                    .overlay(Capsule().strokeBorder(Color.orange.opacity(0.55)))
+                    .matchedGeometryEffect(id: "activeChip", in: chipSpace)
+            }
+        }
     }
 
     private var installBanner: some View {
@@ -219,11 +273,17 @@ struct ConsoleView: View {
     private func sessionRow(_ session: SessionInfo) -> some View {
         let waiting = store.pendingCount(for: session.id)
         let isActive = store.activeRequest?.sessionId == session.id
+        let hovered = hoveredSession == session.id
+        let fill: Color = isActive
+            ? Color.orange.opacity(0.12)
+            : (hovered ? Color.primary.opacity(0.05) : .clear)
 
         return HStack(spacing: 8) {
-            Circle()
-                .fill(color(for: session.state))
-                .frame(width: 7, height: 7)
+            StateDot(
+                color: color(for: session.state),
+                alive: session.state == .working || session.state == .waiting,
+                urgent: session.state == .waiting
+            )
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.folder)
@@ -234,14 +294,19 @@ struct ConsoleView: View {
                     .font(.caption)
                     .foregroundStyle(stateStyle(for: session.state))
                     .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .animation(Motion.card, value: session.state)
             }
 
             if waiting > 1 {
                 Text("\(waiting)")
                     .font(.caption2.bold())
+                    .contentTransition(.numericText())
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(Color.orange.opacity(0.3), in: Capsule())
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    .animation(Motion.badge, value: waiting)
             }
 
             Spacer()
@@ -250,28 +315,28 @@ struct ConsoleView: View {
                 Text(elapsed(since: session.lastActivity))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
-                    .opacity(hoveredSession == session.id ? 0 : 1)
+                    .opacity(hovered ? 0 : 1)
 
-                if hoveredSession == session.id {
-                    Button {
-                        store.dismiss(session.id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .clickable()
-                    .help("Remove from the list")
+                Button {
+                    store.dismiss(session.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
                 }
+                .buttonStyle(.plain)
+                .clickable()
+                .help("Remove from the list")
+                .opacity(hovered ? 1 : 0)
+                .scaleEffect(hovered ? 1 : 0.7)
+                .allowsHitTesting(hovered)
             }
             .frame(width: 34, alignment: .trailing)
+            .animation(Motion.hover, value: hovered)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .background(
-            isActive ? Color.orange.opacity(0.12) : (hoveredSession == session.id ? Color.primary.opacity(0.05) : .clear),
-            in: RoundedRectangle(cornerRadius: 6)
-        )
+        .background(fill, in: RoundedRectangle(cornerRadius: 6))
+        .animation(Motion.hover, value: fill)
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .clickable()
