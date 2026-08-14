@@ -341,6 +341,123 @@ enum TerminalFocus {
         (run.last { $0.number != nil }?.number ?? 0) + 1
     }
 
+    // MARK: - Tab titles
+
+    /// The title Claude Code keeps in the tab, which is its own summary of what it is doing. Keyed by
+    /// the pane ids the hooks report, so the caller needs to know nothing about either terminal.
+    /// nil means the read failed, which is not the same as a screen with no titles on it.
+    static func readTitles(panes: [String: String], completion: @escaping ([String: String]?) -> Void) {
+        // Running only. `tell application` launches what it addresses, and a poll must never open a
+        // terminal that was closed. NSRunningApplication is read here, on the caller's thread.
+        let wantITerm = panes.values.contains { $0.contains(":") } && isRunning("com.googlecode.iterm2")
+        let wantTerminal = panes.values.contains { !$0.contains(":") } && isRunning("com.apple.Terminal")
+        guard wantITerm || wantTerminal else {
+            completion(nil)
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            let iterm = wantITerm ? readITermTitles() : [:]
+            let terminal = wantTerminal ? readTerminalTitles() : [:]
+            // One terminal failing must not blank the titles of the other, so only a read where
+            // everything we asked for failed counts as a failed read.
+            guard iterm != nil || terminal != nil else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            var found: [String: String] = [:]
+            for (sessionId, pane) in panes {
+                switch resolve(pane: pane, cwd: "", client: .other) {
+                case .iTerm(let guid): found[sessionId] = iterm?[guid]
+                case .terminal(let tty): found[sessionId] = terminal?[tty]
+                case nil: continue
+                }
+            }
+            DispatchQueue.main.async { completion(found) }
+        }
+    }
+
+    private static func isRunning(_ bundleId: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
+    }
+
+    /// Both lists in one go, then flattened here. A property read per session is an Apple Event each,
+    /// which is the difference between 0.2s and 0.7s for a couple of dozen tabs.
+    private static func readITermTitles() -> [String: String]? {
+        let script = """
+        tell application "iTerm2"
+          set idRows to id of every session of every tab of every window
+          set nameRows to name of every session of every tab of every window
+        end tell
+        set out to ""
+        repeat with wi from 1 to (count of idRows)
+          set wIds to item wi of idRows
+          set wNames to item wi of nameRows
+          repeat with ti from 1 to (count of wIds)
+            set tIds to item ti of wIds
+            set tNames to item ti of wNames
+            repeat with si from 1 to (count of tIds)
+              set out to out & (item si of tIds) & tab & (item si of tNames) & linefeed
+            end repeat
+          end repeat
+        end repeat
+        return out
+        """
+        return titles(from: shell("/usr/bin/osascript", ["-e", script]), stripJob: true)
+    }
+
+    /// Terminal needs indexed loops here too, and its `name` will not coerce to text at all, so the
+    /// title comes from `custom title` — which is the one the escape sequence writes.
+    /// The delimiter is bound outside the tell block: inside it, `tab` is Terminal's own tab class.
+    private static func readTerminalTitles() -> [String: String]? {
+        let script = """
+        set delim to character id 9
+        tell application "Terminal"
+          set out to ""
+          repeat with wi from 1 to (count of windows)
+            repeat with ti from 1 to (count of tabs of window wi)
+              set out to out & (tty of tab ti of window wi) & delim & ¬
+                (custom title of tab ti of window wi) & linefeed
+            end repeat
+          end repeat
+          return out
+        end tell
+        """
+        return titles(from: shell("/usr/bin/osascript", ["-e", script]), stripJob: false)
+    }
+
+    private static func titles(from output: String?, stripJob: Bool) -> [String: String]? {
+        guard let output else { return nil }
+        var found: [String: String] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count >= 2, !parts[0].isEmpty,
+                  let title = claudeTitle(parts[1], stripJob: stripJob)
+            else { continue }
+            found[parts[0]] = title
+        }
+        return found
+    }
+
+    /// Claude Code opens its title with a spinner glyph, and a shell opens with a path or a command
+    /// name. So the glyph is how a title worth showing is told from the terminal's own default.
+    private static func claudeTitle(_ raw: String, stripJob: Bool) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        guard let marker = text.first, !marker.isLetter, !marker.isNumber, !"~/.".contains(marker)
+        else { return nil }
+
+        var body = text.dropFirst().trimmingCharacters(in: .whitespaces)
+        // iTerm appends the running job in brackets. One bracketed word is that; a bracketed phrase
+        // is more likely part of what Claude called the task.
+        if stripJob, body.hasSuffix(")"), let open = body.lastIndex(of: "(") {
+            let job = body[body.index(after: open)..<body.index(before: body.endIndex)]
+            if !job.isEmpty, !job.contains(" ") {
+                body = String(body[..<open]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return body.isEmpty ? nil : body
+    }
+
     /// Splits a tick box off an option's text. A wrapped option splits the box itself: the bracket
     /// closes on the line below, and the mark, if any, stays next to the opening one.
     private static func box(_ text: String) -> MenuOption {

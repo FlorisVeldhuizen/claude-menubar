@@ -283,10 +283,25 @@ struct ConsoleView: View {
             )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.folder)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Text(session.folder)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                    // What Claude is calling this piece of work. It gives up its width first, since
+                    // the folder is what you look for.
+                    if let title = store.title(for: session.id) {
+                        Text(title)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .contentTransition(.opacity)
+                            .animation(Motion.card, value: title)
+                            .help(title)
+                    }
+                }
                 Text(session.agentType.map { "\(session.state.label) · \($0)" } ?? session.state.label)
                     .font(.caption)
                     .foregroundStyle(stateStyle(for: session.state))

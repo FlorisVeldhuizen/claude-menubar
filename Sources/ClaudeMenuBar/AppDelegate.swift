@@ -37,7 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         SessionScan.run { [weak self] in self?.store.merge(scan: $0) }
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
             SessionScan.run { [weak self] found in
-                Task { @MainActor in self?.store.merge(scan: found) }
+                Task { @MainActor in
+                    self?.store.merge(scan: found)
+                    self?.store.refreshTitles()
+                }
             }
         }
     }
@@ -210,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             popover.contentViewController?.view.window?.makeKey()
             store.panelOpen = true
             store.verifyPending()
+            store.refreshTitles()
         }
     }
 

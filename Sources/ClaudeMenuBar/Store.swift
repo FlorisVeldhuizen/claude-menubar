@@ -528,6 +528,33 @@ final class Store {
         sessions.filter { $0.state == .idle && !hasPending($0.id) }.count
     }
 
+    // MARK: - Tab titles
+
+    /// What Claude Code is calling the work in each tab. Held beside the sessions rather than on them:
+    /// the process scan replaces `discovered` wholesale, which would drop a title written onto it.
+    private(set) var titles: [String: String] = [:]
+
+    func title(for sessionId: String) -> String? { titles[sessionId] }
+
+    /// Only while the panel is open. A title nobody is looking at is not worth an AppleScript round
+    /// trip, which queues ahead of the next keystroke.
+    func refreshTitles() {
+        guard panelOpen else { return }
+        var handles = panes.filter { !$0.value.isEmpty }
+        for session in discovered {
+            if let pane = session.pane, !pane.isEmpty { handles[session.id] = pane }
+        }
+        guard !handles.isEmpty else { return }
+
+        TerminalFocus.readTitles(panes: handles) { [weak self] found in
+            Task { @MainActor in
+                guard let self, let found, self.titles != found else { return }
+                self.titles = found
+                Log.write("TITLE", "named \(found.count) of \(handles.count) tabs")
+            }
+        }
+    }
+
     // MARK: - Alert sound
 
     private(set) var alertSound = Sound.current
