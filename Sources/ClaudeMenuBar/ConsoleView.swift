@@ -5,6 +5,7 @@ struct ConsoleView: View {
     let port: UInt16
     var onInstallHooks: () -> Void
     var onAbout: () -> Void
+    var onClose: () -> Void
     var onQuit: () -> Void
 
     @State private var noteTarget: String?
@@ -63,6 +64,9 @@ struct ConsoleView: View {
         .background {
             Button("") { store.step(1) }.keyboardShortcut("]", modifiers: .command).hidden()
             Button("") { store.step(-1) }.keyboardShortcut("[", modifiers: .command).hidden()
+            // The panel does not dismiss itself any more, so Escape is the key that closes it. It
+            // backs out of the message field first, which is the thing you are in when you press it.
+            Button("") { escape() }.keyboardShortcut(.cancelAction).hidden()
         }
     }
 
@@ -90,6 +94,15 @@ struct ConsoleView: View {
             case .session(let session): return "session:\(session.id)"
             }
         }
+    }
+
+    private func escape() {
+        guard noteTarget == nil else {
+            noteTarget = nil
+            noteText = ""
+            return
+        }
+        onClose()
     }
 
     private var listRows: [ListRow] {

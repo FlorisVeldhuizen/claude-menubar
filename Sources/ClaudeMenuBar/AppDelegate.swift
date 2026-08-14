@@ -133,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 port: Self.port,
                 onInstallHooks: { [weak self] in self?.toggleHooks() },
                 onAbout: { [weak self] in self?.showAbout() },
+                onClose: { [weak self] in self?.closePanel() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -149,11 +150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         store.hooksInstalled = HookInstaller.isInstalled(port: Self.port)
     }
 
+    private func closePanel() {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+    }
+
     private func refreshStatusItem() {
         let count = store.pending.count
         drawStatusIcon(count: count)
         statusItem.button?.toolTip = count > 0 ? "\(count) waiting on you" : "Claude sessions"
-        if count == 0, popover.isShown, store.sessions.isEmpty { popover.performClose(nil) }
+        // Nothing left to answer, so the panel goes if there is nothing to look at — or if it was
+        // only still up because decisions were holding it there while you worked somewhere else.
+        // Answering the last one from a notification leaves no other event to come and close it.
+        guard count == 0, popover.isShown, store.sessions.isEmpty || !NSApp.isActive else { return }
+        popover.performClose(nil)
     }
 
     private func drawStatusIcon(count: Int) {
