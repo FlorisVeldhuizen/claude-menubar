@@ -61,6 +61,12 @@ final class Store {
         pending.filter { $0.sessionId == sessionId }.count
     }
 
+    /// Answered here, but the keystroke has not landed and Claude has not reported back yet. The row
+    /// says so for that beat instead of claiming the turn is finished.
+    private(set) var answering: Set<String> = []
+
+    func isAnswering(_ sessionId: String) -> Bool { answering.contains(sessionId) }
+
     var onChange: (() -> Void)?
     var onNewRequest: ((PendingRequest) -> Void)?
 
@@ -70,6 +76,7 @@ final class Store {
     private var answered: [String: PendingRequest] = [:]
     private var gateWaiters: [String: CheckedContinuation<DecisionResult, Never>] = [:]
     private var gateTimeouts: [String: Task<Void, Never>] = [:]
+    private var answeringTimeouts: [String: Task<Void, Never>] = [:]
     private var wentQuiet: Set<String> = []
     private var reading: Set<String> = []
     private var lastKeyAt: [String: Date] = [:]
@@ -209,6 +216,7 @@ final class Store {
         guard queuedKeys.removeValue(forKey: request.sessionId) != nil else { return }
         Log.write("KEY", "dropped: no prompt appeared for \(request.folder)")
         if !pending.contains(where: { $0.id == request.id }) { pending.append(request) }
+        endAnswering(request.sessionId)
         focusedRequestId = request.id
         notice = "\(request.folder) never drew its prompt — nothing was typed."
         onChange?()
@@ -322,7 +330,9 @@ final class Store {
         notice = nil
         answered[request.sessionId] = request
         pending.removeAll { $0.id == request.id }
-        settle(request.sessionId)
+        // Not settled yet: the answer still has to reach the pane. Another card for the same session
+        // means the row genuinely still needs you, so it stays as it is.
+        if !hasPending(request.sessionId) { beginAnswering(request.sessionId) }
         if focusedRequestId == request.id { focusedRequestId = nil }
         onChange?()
 
@@ -333,6 +343,8 @@ final class Store {
             case .cancelThenSay(let text): releaseGate(request.id, decision: .deny, message: text)
             case .reply(let text): releaseGate(request.id, decision: .deny, message: text)
             }
+            // The hook carries the decision back itself, so Claude has it the moment we return.
+            answerLanded(request.sessionId)
             return
         }
 
@@ -346,6 +358,41 @@ final class Store {
                 self?.dropQueuedKey(request)
             }
         }
+    }
+
+    private func beginAnswering(_ sessionId: String) {
+        answering.insert(sessionId)
+        answeringTimeouts[sessionId]?.cancel()
+        // A backstop only: landing, a failure, or the next hook all end this sooner. Longer than the
+        // 8s a queued key waits, so a key still on its way is never called finished.
+        answeringTimeouts[sessionId] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            self?.endAnswering(sessionId)
+        }
+    }
+
+    /// The answer is in the pane, so Claude has it and is running again. Without this the row read
+    /// "finished its turn" for as long as the tool took to run.
+    private func answerLanded(_ sessionId: String) {
+        guard answering.contains(sessionId) else { return }
+        clearAnswering(sessionId)
+        setState(sessionId, to: .working)
+        onChange?()
+    }
+
+    /// The answer never got there, or a hook has overtaken it. Either way the row goes back to
+    /// whatever it really is.
+    private func endAnswering(_ sessionId: String) {
+        // A key still queued has not been sent, so this is not over yet.
+        guard queuedKeys[sessionId] == nil, answering.contains(sessionId) else { return }
+        clearAnswering(sessionId)
+        settle(sessionId)
+        onChange?()
+    }
+
+    private func clearAnswering(_ sessionId: String) {
+        answering.remove(sessionId)
+        answeringTimeouts.removeValue(forKey: sessionId)?.cancel()
     }
 
     /// Ticks one box of a multiple-choice question, flipping it here first so the click lands at once.
@@ -411,14 +458,21 @@ final class Store {
         let request = answered[session]
         TerminalFocus.send(key: key, pane: pane, cwd: cwd, client: client(for: session)) { [weak self] ok in
             Log.write("KEY", ok ? "delivered" : "FAILED to reach pane")
-            guard !ok, let self, let request else { return }
-            Task { @MainActor in self.deliveryFailed(request) }
+            Task { @MainActor in
+                guard let self else { return }
+                guard ok else {
+                    if let request { self.deliveryFailed(request) }
+                    return
+                }
+                self.answerLanded(session)
+            }
         }
     }
 
     /// We could not identify the pane, so the prompt is still unanswered. Put the card back and say so.
     private func deliveryFailed(_ request: PendingRequest) {
         if !pending.contains(where: { $0.id == request.id }) { pending.append(request) }
+        endAnswering(request.sessionId)
         focusedRequestId = request.id
         notice = request.isTickList && client(for: request.sessionId) == .terminal
             ? "Terminal can't be sent an arrow key, so \(request.folder)'s tick list has to be submitted there."
@@ -635,7 +689,8 @@ final class Store {
     }
 
     /// A row may only claim it needs you while a card backs it up. Once the last one goes, the
-    /// prompt has been settled somewhere, so the session is between turns.
+    /// prompt has been settled somewhere, so the session is between turns. An answer of our own
+    /// holds this off until it lands, since a session we just answered is not between turns.
     private func settle(_ sessionId: String) {
         guard !hasPending(sessionId),
               let index = sessions.firstIndex(where: { $0.id == sessionId }),
@@ -650,6 +705,9 @@ final class Store {
         guard let sessionId = event.sessionId else { return }
         if let pane = event.termSession, !pane.isEmpty { remember(pane: pane, for: sessionId) }
         note(event, for: sessionId)
+        // Claude has spoken for itself, so the event below says what the row is, not our guess.
+        // Before the flush: a key still queued has not been sent, and this leaves that one alone.
+        endAnswering(sessionId)
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
         // This fires the moment Claude Code draws its prompt, which is when a keystroke can land.
         if event.hookEventName == "Notification" {

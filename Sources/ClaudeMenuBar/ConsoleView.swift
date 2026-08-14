@@ -71,6 +71,8 @@ struct ConsoleView: View {
     private enum Layout {
         static let slot: CGFloat = 286
         static let strip: CGFloat = 18
+        /// How wide a chip's name may grow, so one long project cannot take the strip on its own.
+        static let chipLabel: CGFloat = 92
     }
 
     /// What the list looks like right now. Rows animate when this changes, and not when a clock ticks.
@@ -195,16 +197,18 @@ struct ConsoleView: View {
 
     /// One chip per pending decision, so switching is a single click rather than hunting the list.
     private var queueChips: some View {
-        ScrollViewReader { strip in
+        let repeated = repeatedFolders
+        return ScrollViewReader { strip in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(store.pending) { request in
-                        chip(request)
+                        chip(request, spellOutTool: repeated.contains(request.folder))
                     }
                 }
                 .padding(.horizontal, 12)
                 .animation(Motion.chip, value: store.activeRequest?.id)
             }
+            .mask(Self.edgeFade)
             .onChange(of: store.activeRequest?.id) { _, id in
                 guard let id else { return }
                 withAnimation(Motion.chip) { strip.scrollTo(id, anchor: .center) }
@@ -214,12 +218,39 @@ struct ConsoleView: View {
         .help("Click a project, or press ⌘[ and ⌘] to switch")
     }
 
-    private func chip(_ request: PendingRequest) -> some View {
+    /// A queue that runs past the strip fades out at its ends, so more waiting says so. The fade is
+    /// narrower than the row's own padding, so with few enough to fit it falls on empty space.
+    private static let edgeFade = LinearGradient(
+        stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .black, location: 0.02),
+            .init(color: .black, location: 0.98),
+            .init(color: .clear, location: 1),
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
+    /// One project can hold several decisions at once, and a chip named for the project alone would
+    /// then read the same twice over.
+    private var repeatedFolders: Set<String> {
+        var seen: Set<String> = []
+        var repeated: Set<String> = []
+        for request in store.pending where !seen.insert(request.folder).inserted {
+            repeated.insert(request.folder)
+        }
+        return repeated
+    }
+
+    private func chip(_ request: PendingRequest, spellOutTool: Bool) -> some View {
         let active = store.activeRequest?.id == request.id
         return Button { store.focus(requestId: request.id) } label: {
-            Text(request.folder)
+            Text(spellOutTool ? "\(request.folder) · \(request.toolName)" : request.folder)
                 .font(.caption2.weight(active ? .semibold : .regular))
                 .lineLimit(1)
+                // Middle, so a name cut short keeps the tool on the end that tells them apart.
+                .truncationMode(.middle)
+                .frame(maxWidth: Layout.chipLabel)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background { chipBackground(active: active) }
@@ -270,6 +301,7 @@ struct ConsoleView: View {
 
     private func sessionRow(_ session: SessionInfo) -> some View {
         let waiting = store.pendingCount(for: session.id)
+        let answering = store.isAnswering(session.id)
         let isActive = store.activeRequest?.sessionId == session.id
         let hovered = hoveredSession == session.id
         let fill: Color = isActive
@@ -278,9 +310,10 @@ struct ConsoleView: View {
 
         return HStack(spacing: 8) {
             StateDot(
-                color: color(for: session.state),
-                alive: session.state == .working || session.state == .waiting,
-                urgent: session.state == .waiting
+                color: answering ? .orange : color(for: session.state),
+                alive: answering || session.state == .working || session.state == .waiting,
+                // Its own answer is on the way, so the dot breathes rather than presses.
+                urgent: session.state == .waiting && !answering
             )
 
             VStack(alignment: .leading, spacing: 1) {
@@ -303,12 +336,13 @@ struct ConsoleView: View {
                             .help(title)
                     }
                 }
-                Text(session.agentType.map { "\(session.state.label) · \($0)" } ?? session.state.label)
+                Text(stateLine(for: session, answering: answering))
                     .font(.caption)
-                    .foregroundStyle(stateStyle(for: session.state))
+                    .foregroundStyle(answering ? AnyShapeStyle(Color.orange) : stateStyle(for: session.state))
                     .lineLimit(1)
                     .contentTransition(.opacity)
                     .animation(Motion.card, value: session.state)
+                    .animation(Motion.card, value: answering)
             }
 
             // The animation sits outside the branch, so the badge pops on the same curve as the
@@ -363,7 +397,15 @@ struct ConsoleView: View {
                 store.jump(to: session)
             }
         }
-        .help("\(session.state.meaning)\n\n\(clickHint(waiting: waiting, session: session))")
+        .help("\(answering ? Self.answeringMeaning : session.state.meaning)\n\n\(clickHint(waiting: waiting, session: session))")
+    }
+
+    private static let answeringLabel = "sending your answer"
+    private static let answeringMeaning = "Your answer is on its way to that pane. The row says what Claude is doing as soon as it says so itself."
+
+    private func stateLine(for session: SessionInfo, answering: Bool) -> String {
+        let base = answering ? Self.answeringLabel : session.state.label
+        return session.agentType.map { "\(base) · \($0)" } ?? base
     }
 
     private func clickHint(waiting: Int, session: SessionInfo) -> String {

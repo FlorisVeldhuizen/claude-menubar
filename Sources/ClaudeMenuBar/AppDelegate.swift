@@ -61,8 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// The backstop for a click the popover did not see: whatever you clicked took the app with it.
+    /// Decisions still waiting keep it up, though. Answering one of a queue must not cost you the
+    /// panel the rest are in, and typing an answer can take the focus off us on its way out.
     func applicationDidResignActive(_ notification: Notification) {
-        guard popover.isShown else { return }
+        guard popover.isShown, store.pending.isEmpty else { return }
         popover.performClose(nil)
     }
 
@@ -119,7 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func setUpPopover() {
         popover = NSPopover()
-        popover.behavior = .transient
+        // Not transient: a transient popover dismisses itself on events it reads as "outside", and
+        // answering a card destroys the view holding the keyboard focus. Closing is ours to decide,
+        // and applicationDidResignActive is where the click that went elsewhere is caught.
+        popover.behavior = .applicationDefined
         popover.animates = true
         popover.delegate = self
         let controller = NSHostingController(
