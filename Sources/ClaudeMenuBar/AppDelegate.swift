@@ -89,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func setUpStatusItem() {
         // Fixed width: a variable-width item moves the popover's anchor when the badge appears or clears.
-        statusItem = NSStatusBar.system.statusItem(withLength: 24)
+        statusItem = NSStatusBar.system.statusItem(withLength: CrabIcon.width)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
@@ -126,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func drawStatusIcon(count: Int) {
-        statusItem.button?.image = Self.statusImage(count: count, badge: badgeScale)
+        statusItem.button?.image = CrabIcon.statusImage(count: count, badge: badgeScale)
     }
 
     private var badgeScale: CGFloat = 1
@@ -154,37 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self.drawStatusIcon(count: self.store.pending.count)
             }
         }
-    }
-
-    /// The count is punched out of the icon so the item stays one snug fixed width.
-    private static func statusImage(count: Int, badge: CGFloat = 1) -> NSImage {
-        let size = NSSize(width: 24, height: 18)
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        guard let symbol = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Claude sessions")?
-            .withSymbolConfiguration(config)
-        else { return NSImage() }
-
-        let image = NSImage(size: size, flipped: false) { _ in
-            // Centred in the image, which is centred in the item, so the popover arrow lands on the glyph.
-            symbol.draw(in: NSRect(x: (size.width - 16) / 2, y: 1, width: 16, height: 16))
-            guard count > 0 else { return true }
-
-            // A digit this small is unreadable over the glyph, so the badge is just a dot.
-            // The count itself lives in the tooltip and the panel.
-            let centre = NSPoint(x: 18.5, y: 13.5)
-            let radius = 3.5 * max(badge, 0.01)
-            let dot = NSRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
-            let gap = dot.insetBy(dx: -radius / 2, dy: -radius / 2)
-
-            NSGraphicsContext.current?.compositingOperation = .destinationOut
-            NSBezierPath(ovalIn: gap).fill()
-            NSGraphicsContext.current?.compositingOperation = .sourceOver
-            NSColor.black.setFill()
-            NSBezierPath(ovalIn: dot).fill()
-            return true
-        }
-        image.isTemplate = true
-        return image
     }
 
     /// A transient popover also closes on its own, so the flag can't be left set by the toggle alone.

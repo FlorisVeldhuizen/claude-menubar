@@ -54,67 +54,61 @@ let simple = Crab(
 )
 
 let shellColour = NSColor(srgbRed: 0.80, green: 0.47, blue: 0.36, alpha: 1)
+let friendColour = NSColor(srgbRed: 0.64, green: 0.37, blue: 0.28, alpha: 1)
 let eyeColour = NSColor(srgbRed: 0.07, green: 0.07, blue: 0.09, alpha: 1)
-let barColour = NSColor(srgbRed: 0.30, green: 0.30, blue: 0.34, alpha: 1)
-let menuColour = NSColor(srgbRed: 0.47, green: 0.47, blue: 0.52, alpha: 1)
-let badgeColour = NSColor(srgbRed: 0.93, green: 0.44, blue: 0.33, alpha: 1)
+let barColour = NSColor(srgbRed: 0.34, green: 0.34, blue: 0.38, alpha: 1)
+let plateColours = [
+    NSColor(srgbRed: 0.16, green: 0.16, blue: 0.19, alpha: 1),
+    NSColor(srgbRed: 0.07, green: 0.07, blue: 0.09, alpha: 1),
+]
 
-/// The tile as a screen: a menu bar across the top, its badge alight, the crab hanging under it.
-let screen: CGFloat = 26
-let bar = [
-    Block(x: 0, y: 0, width: screen, height: 4),
-]
-let menus = [
-    Block(x: 2, y: 1, width: 3, height: 2),
-    Block(x: 6, y: 1, width: 4, height: 2),
-    Block(x: 11, y: 1, width: 3, height: 2),
-]
-let badge = [
-    Block(x: 22, y: 1, width: 2, height: 2),
-]
+/// A 40 unit tile: the menu bar along the top edge, the crab below it, two more half out of frame.
+let screen: CGFloat = 40
+let bar = Block(x: 0, y: 0, width: screen, height: 4)
+let crabAt = CGPoint(x: 9, y: 14)
+let friendsAt = [CGPoint(x: -7, y: 19), CGPoint(x: 33, y: 19)]
 
 func draw(size: CGFloat) -> NSImage {
     NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
         // Below 64 pixels there is no room for the bar as well, so the crab has the tile to itself.
         let small = size < 64
-        let crab = small ? simple : detailed
-        let columns: CGFloat = small ? crab.columns : screen
+        // The two behind need a whole crab each to read as one, which needs 128 pixels.
+        let crowded = size >= 128
+        let columns: CGFloat = small ? simple.columns : screen
         let inset = small ? size * 0.03 : size * 0.095
         let tile = NSRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
         let plate = NSBezierPath(roundedRect: tile, xRadius: tile.width * 0.225, yRadius: tile.width * 0.225)
-        NSGradient(
-            colors: [
-                NSColor(srgbRed: 0.16, green: 0.16, blue: 0.19, alpha: 1),
-                NSColor(srgbRed: 0.07, green: 0.07, blue: 0.09, alpha: 1),
-            ]
-        )?.draw(in: plate, angle: -90)
+        NSGradient(colors: plateColours)?.draw(in: plate, angle: -90)
 
         let unit = small ? max(1, (tile.width / columns).rounded(.down)) : tile.width / columns
         let origin = CGPoint(x: tile.midX - unit * columns / 2, y: tile.midY + unit * columns / 2)
         // Blocks only look like pixels while their edges sit on pixels, which needs a unit worth rounding.
         let snap: (CGFloat) -> CGFloat = unit >= 2 ? { $0.rounded() } : { $0 }
-        func rect(_ block: Block, offset: CGPoint = .zero) -> NSRect {
-            let left = snap(origin.x + (block.x + offset.x) * unit)
-            let right = snap(origin.x + (block.x + offset.x + block.width) * unit)
-            let top = snap(origin.y - (block.y + offset.y) * unit)
-            let bottom = snap(origin.y - (block.y + offset.y + block.height) * unit)
+        func rect(_ block: Block, at: CGPoint = .zero) -> NSRect {
+            let left = snap(origin.x + (block.x + at.x) * unit)
+            let right = snap(origin.x + (block.x + at.x + block.width) * unit)
+            let top = snap(origin.y - (block.y + at.y) * unit)
+            let bottom = snap(origin.y - (block.y + at.y + block.height) * unit)
             return NSRect(x: left, y: bottom, width: right - left, height: top - bottom)
         }
-
-        var offset = CGPoint(x: 0, y: (columns - crab.rows) / 2)
-        if !small {
-            plate.setClip()
-            for (blocks, colour) in [(bar, barColour), (menus, menuColour), (badge, badgeColour)] {
-                colour.setFill()
-                blocks.forEach { NSBezierPath(rect: rect($0)).fill() }
-            }
-            offset = CGPoint(x: (columns - crab.columns) / 2, y: 5)
+        func paint(_ crab: Crab, at: CGPoint, colour: NSColor) {
+            colour.setFill()
+            crab.body.forEach { NSBezierPath(rect: rect($0, at: at)).fill() }
+            eyeColour.setFill()
+            crab.eyes.forEach { NSBezierPath(rect: rect($0, at: at)).fill() }
         }
 
-        shellColour.setFill()
-        crab.body.forEach { NSBezierPath(rect: rect($0, offset: offset)).fill() }
-        eyeColour.setFill()
-        crab.eyes.forEach { NSBezierPath(rect: rect($0, offset: offset)).fill() }
+        guard !small else {
+            paint(simple, at: CGPoint(x: 0, y: (columns - simple.rows) / 2), colour: shellColour)
+            return true
+        }
+
+        plate.setClip()
+        barColour.setFill()
+        NSBezierPath(rect: rect(bar)).fill()
+
+        if crowded { friendsAt.forEach { paint(simple, at: $0, colour: friendColour) } }
+        paint(detailed, at: crabAt, colour: shellColour)
         return true
     }
 }
