@@ -73,6 +73,7 @@ final class Store {
     private var reading: Set<String> = []
     private var lastKeyAt: [String: Date] = [:]
     private var lastMenu: [String: (menu: TerminalMenu, at: Date)] = [:]
+    private var unannounced: [String: PendingRequest] = [:]
     private var pollTick = 0
 
     /// Set by the app: with the panel shut, nobody is watching a card's boxes.
@@ -175,6 +176,7 @@ final class Store {
                 let options = menu.options
                 if let typed = self.lastKeyAt[id], typed > startedAt { return }
                 self.lastMenu[id] = (menu, Date())
+                if !options.isEmpty { self.announce(id, drawn: true) }
                 guard let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
                 if options.isEmpty {
                     guard !self.pending[index].terminalOptions.isEmpty else { return }
@@ -278,9 +280,37 @@ final class Store {
         pending.append(request)
         Log.write("CARD", "added \(tool) id=\(request.id) session=\(sessionId) pending=\(pending.count)")
         onChange?()
-        onNewRequest?(request)
+        announceWhenReady(request)
 
         return DecisionResult(decision: .ask, message: nil)
+    }
+
+    // MARK: - Alerting
+
+    /// The hook beats the prompt to the screen by a moment, and a card with no menu behind it cannot
+    /// be answered yet. So the alert waits for Claude Code to draw it.
+    private func announceWhenReady(_ request: PendingRequest) {
+        guard !promptShowing.contains(request.sessionId) else {
+            onNewRequest?(request)
+            return
+        }
+        unannounced[request.id] = request
+        Task { [weak self] in
+            // Shorter than the 8s a queued key waits, so a late alert is still one you can act on.
+            try? await Task.sleep(for: .seconds(6))
+            self?.announce(request.id, drawn: false)
+        }
+    }
+
+    private func announceReady(session: String) {
+        for id in unannounced.filter({ $0.value.sessionId == session }).keys { announce(id, drawn: true) }
+    }
+
+    private func announce(_ id: String, drawn: Bool) {
+        guard let request = unannounced.removeValue(forKey: id) else { return }
+        guard pending.contains(where: { $0.id == id }) else { return }
+        if !drawn { Log.write("ALERT", "no prompt seen for \(request.folder); alerting anyway") }
+        onNewRequest?(request)
     }
 
     /// Answer the prompt in the terminal. Waits for it to be drawn if it isn't yet.
@@ -400,6 +430,7 @@ final class Store {
         releaseGate(id, decision: .ask)
         Log.write("CARD", "removed id=\(id)")
         wentQuiet.remove(id)
+        unannounced.removeValue(forKey: id)
         pending.removeAll { $0.id == id }
         settle(request.sessionId)
         if focusedRequestId == id { focusedRequestId = nil }
@@ -577,6 +608,7 @@ final class Store {
         if event.hookEventName == "Notification" {
             promptShowing.insert(sessionId)
             flushKey(sessionId)
+            announceReady(session: sessionId)
             verifyPending()
         }
         settledElsewhere(event)
