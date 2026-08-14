@@ -4,9 +4,13 @@ import SwiftUI
 struct RequestCard: View {
     let store: Store
     let request: PendingRequest
-    let now: Date
     @Binding var noteTarget: String?
     @Binding var noteText: String
+
+    /// Only the card watches this clock: it has to know when Claude's menu is not coming.
+    @State private var now = Date()
+
+    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private enum Layout {
         static let detailBox: CGFloat = 150
@@ -45,6 +49,7 @@ struct RequestCard: View {
             .padding(.horizontal, 12)
             .background { shortcuts }
             .animation(Motion.card, value: noteTarget)
+            .onReceive(tick) { now = $0 }
             // A card that lands while you are looking elsewhere gets one beat of extra colour.
             .onAppear {
                 landed = false

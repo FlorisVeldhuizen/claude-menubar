@@ -9,10 +9,7 @@ struct ConsoleView: View {
     @State private var noteTarget: String?
     @State private var noteText = ""
     @State private var hoveredSession: String?
-    @State private var now = Date()
     @Namespace private var chipSpace
-
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,24 +23,29 @@ struct ConsoleView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if !store.hooksInstalled {
                         installBanner
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.stackRow)
                     }
 
                     if store.allSessions.isEmpty {
-                        section("Sessions")
-                        Text("No sessions yet. Start Claude Code in any project.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 6)
+                        VStack(alignment: .leading, spacing: 10) {
+                            section("Sessions")
+                            Text("No sessions yet. Start Claude Code in any project.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 6)
+                        }
+                        .transition(.stackRow)
                     } else {
-                        ForEach(store.sessionGroups) { group in
-                            section(group.title)
-                            ForEach(group.sessions) { session in
-                                sessionRow(session)
-                                    .transition(.scale(scale: 0.97, anchor: .leading).combined(with: .opacity))
+                        // One list rather than a list per group: a session that changes group is then
+                        // the same row moving, not one row leaving and another appearing elsewhere.
+                        ForEach(listRows) { row in
+                            switch row {
+                            case .heading(let title): section(title)
+                            case .session(let session): sessionRow(session)
                             }
                         }
+                        .transition(.stackRow)
                     }
                 }
                 .padding(.vertical, 10)
@@ -57,7 +59,6 @@ struct ConsoleView: View {
             footer
         }
         .frame(width: ConsoleView.size.width, height: ConsoleView.size.height)
-        .onReceive(tick) { now = $0 }
         .background {
             Button("") { store.step(1) }.keyboardShortcut("]", modifiers: .command).hidden()
             Button("") { store.step(-1) }.keyboardShortcut("[", modifiers: .command).hidden()
@@ -73,8 +74,25 @@ struct ConsoleView: View {
 
     /// What the list looks like right now. Rows animate when this changes, and not when a clock ticks.
     private var listShape: String {
-        store.hooksInstalled.description
-            + store.allSessions.map { "\($0.id):\($0.state.rawValue)" }.joined(separator: ",")
+        store.hooksInstalled.description + listRows.map(\.id).joined(separator: ",")
+    }
+
+    private enum ListRow: Identifiable {
+        case heading(String)
+        case session(SessionInfo)
+
+        var id: String {
+            switch self {
+            case .heading(let title): return "heading:\(title)"
+            case .session(let session): return "session:\(session.id)"
+            }
+        }
+    }
+
+    private var listRows: [ListRow] {
+        store.sessionGroups.flatMap { group in
+            [ListRow.heading(group.title)] + group.sessions.map(ListRow.session)
+        }
     }
 
     // MARK: - Header / footer
@@ -118,28 +136,7 @@ struct ConsoleView: View {
 
             Spacer()
 
-            Menu {
-                Button("Clear idle sessions") { store.clearIdle() }
-                    .disabled(store.idleCount == 0)
-                Button("Reset always-allow (\(store.autoAllow.count))") { store.clearAutoAllow() }
-                    .disabled(store.autoAllow.isEmpty)
-                Divider()
-                Toggle("Mute alerts", isOn: Binding(get: { store.muted }, set: { _ in store.toggleMute() }))
-                Picker("Alert sound", selection: Binding(get: { store.alertSound }, set: { store.pickSound($0) })) {
-                    ForEach(Sound.names, id: \.self) { name in
-                        Text(name == Sound.silent ? "None — silent" : name).tag(name)
-                    }
-                }
-                Divider()
-                Button(store.hooksInstalled ? "Remove hooks" : "Install hooks", action: onInstallHooks)
-                Divider()
-                Button("Quit", action: onQuit)
-            } label: {
-                Image(systemName: store.muted ? "speaker.slash.circle" : "ellipsis.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 24)
+            PanelMenu(store: store, onInstallHooks: onInstallHooks, onQuit: onQuit)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
@@ -169,7 +166,7 @@ struct ConsoleView: View {
             }
 
             if let request = store.activeRequest {
-                RequestCard(store: store, request: request, now: now, noteTarget: $noteTarget, noteText: $noteText)
+                RequestCard(store: store, request: request, noteTarget: $noteTarget, noteText: $noteText)
                     .id(request.id)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),
@@ -298,23 +295,25 @@ struct ConsoleView: View {
                     .animation(Motion.card, value: session.state)
             }
 
-            if waiting > 1 {
-                Text("\(waiting)")
-                    .font(.caption2.bold())
-                    .contentTransition(.numericText())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Color.orange.opacity(0.3), in: Capsule())
-                    .transition(.scale(scale: 0.5).combined(with: .opacity))
-                    .animation(Motion.badge, value: waiting)
+            // The animation sits outside the branch, so the badge pops on the same curve as the
+            // header's rather than on whatever curve the list happens to be moving on.
+            Group {
+                if waiting > 1 {
+                    Text("\(waiting)")
+                        .font(.caption2.bold())
+                        .contentTransition(.numericText())
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.3), in: Capsule())
+                        .transition(.scale(scale: 0.5).combined(with: .opacity))
+                }
             }
+            .animation(Motion.badge, value: waiting)
 
             Spacer()
 
             ZStack(alignment: .trailing) {
-                Text(elapsed(since: session.lastActivity))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                ElapsedLabel(since: session.lastActivity)
                     .opacity(hovered ? 0 : 1)
 
                 Button {
@@ -374,10 +373,60 @@ struct ConsoleView: View {
         }
     }
 
-    private func elapsed(since date: Date) -> String {
-        let seconds = Int(now.timeIntervalSince(date))
+}
+
+/// Keeps its own clock. A tick that redrew the whole panel also rebuilt the footer menu, which
+/// closed any submenu you had open.
+private struct ElapsedLabel: View {
+    let since: Date
+
+    @State private var now = Date()
+
+    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(text)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .onReceive(tick) { now = $0 }
+    }
+
+    private var text: String {
+        let seconds = Int(now.timeIntervalSince(since))
         if seconds < 60 { return "\(max(seconds, 0))s" }
         if seconds < 3600 { return "\(seconds / 60)m" }
         return "\(seconds / 3600)h"
+    }
+}
+
+/// Its own view, so a change anywhere else in the panel cannot rebuild an open menu under the pointer.
+private struct PanelMenu: View {
+    let store: Store
+    var onInstallHooks: () -> Void
+    var onQuit: () -> Void
+
+    var body: some View {
+        Menu {
+            Button("Clear idle sessions") { store.clearIdle() }
+                .disabled(store.idleCount == 0)
+            Button("Reset always-allow (\(store.autoAllow.count))") { store.clearAutoAllow() }
+                .disabled(store.autoAllow.isEmpty)
+            Divider()
+            Toggle("Mute alerts", isOn: Binding(get: { store.muted }, set: { _ in store.toggleMute() }))
+            Picker("Alert sound", selection: Binding(get: { store.alertSound }, set: { store.pickSound($0) })) {
+                ForEach(Sound.names, id: \.self) { name in
+                    Text(name == Sound.silent ? "None — silent" : name).tag(name)
+                }
+            }
+            Divider()
+            Button(store.hooksInstalled ? "Remove hooks" : "Install hooks", action: onInstallHooks)
+            Divider()
+            Button("Quit", action: onQuit)
+        } label: {
+            Image(systemName: store.muted ? "speaker.slash.circle" : "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 24)
     }
 }

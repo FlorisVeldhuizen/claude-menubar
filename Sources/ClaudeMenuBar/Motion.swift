@@ -13,6 +13,19 @@ enum Motion {
     static var badge: Animation { reduced ? .easeInOut(duration: 0.10) : .bouncy(duration: 0.34) }
 }
 
+extension AnyTransition {
+    /// One way in and out of the session stack, so a heading, a row and the banner all arrive alike.
+    static var stackRow: AnyTransition {
+        guard !Motion.reduced else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity
+                .combined(with: .scale(scale: 0.97, anchor: .top))
+                .combined(with: .offset(y: -6)),
+            removal: .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
+        )
+    }
+}
+
 /// The panel's main target, so it lights under the pointer and gives way under the click.
 struct AnswerButtonStyle: ButtonStyle {
     enum Kind { case option, primary, quiet }
@@ -98,7 +111,7 @@ struct StateDot: View {
                         .opacity(expanded ? 0 : 0.5)
                 }
             }
-            .animation(Motion.hover, value: color)
+            .animation(Motion.card, value: color)
             .onAppear(perform: start)
             .onDisappear { expanded = false }
             .onChange(of: alive) { start() }
