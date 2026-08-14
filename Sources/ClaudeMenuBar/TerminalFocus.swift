@@ -1,7 +1,7 @@
 import AppKit
 
 /// Brings the terminal tab running a given session to the front.
-/// Claude Code's hooks carry no PID, so the session is matched by working directory.
+/// Claude Code's hooks carry no PID, so a session is matched by its pane id, or by cwd as a fallback.
 enum TerminalFocus {
     static func reveal(
         pane: String?,
@@ -20,106 +20,196 @@ enum TerminalFocus {
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            if let guid = resolve(pane: pane, cwd: cwd), focusITerm(guid: guid) {
+            let focused: Bool
+            switch resolve(pane: pane, cwd: cwd, client: client) {
+            case .iTerm(let guid): focused = focusITerm(guid: guid)
+            case .terminal(let tty): focused = focusTerminal(tty: tty)
+            case nil: focused = false
+            }
+            if focused {
                 Log.write("JUMP", "focused pane for \(cwd)")
                 DispatchQueue.main.async { completion(true) }
                 return
             }
-            Log.write("JUMP", "no exact pane for \(cwd); activating iTerm2 only")
+            Log.write("JUMP", "no exact pane for \(cwd); activating the terminal only")
             DispatchQueue.main.async {
-                activateAnyTerminal()
+                activateAnyTerminal(client: client)
                 completion(false)
             }
         }
     }
 
+    /// How to address the pane: iTerm2 by session id, Apple Terminal by the tty its tabs expose.
+    private enum Target {
+        case iTerm(guid: String)
+        case terminal(tty: String)
+    }
+
     /// The pane id comes from the session's own hook, so it is exact. The cwd scan is only a fallback.
-    private static func resolve(pane: String?, cwd: String) -> String? {
+    private static func resolve(pane: String?, cwd: String, client: SessionClient) -> Target? {
         if let pane, !pane.isEmpty {
-            return pane.split(separator: ":").last.map(String.init)
+            // An iTerm id carries a wNtNpN prefix; Apple Terminal's TERM_SESSION_ID is a bare UUID.
+            guard pane.contains(":") else {
+                return terminalTTY(sessionId: pane).map { .terminal(tty: $0) }
+            }
+            return pane.split(separator: ":").last.map { .iTerm(guid: String($0)) }
         }
-        return cwd.isEmpty ? nil : sessionGUID(forCwd: cwd)
+        // The cwd scan finds iTerm ids only, so for a session elsewhere it would name the wrong pane.
+        guard client != .terminal, !cwd.isEmpty, let guid = sessionGUID(forCwd: cwd) else { return nil }
+        return .iTerm(guid: guid)
+    }
+
+    private static let ttyLock = NSLock()
+    private static var ttyCache: [String: String] = [:]
+
+    /// Terminal tabs expose no session id, so the tty is the only shared handle. Cached because
+    /// the menu is re-read every few seconds while a card is open.
+    private static func terminalTTY(sessionId: String) -> String? {
+        ttyLock.lock()
+        let cached = ttyCache[sessionId]
+        ttyLock.unlock()
+        if let cached { return cached }
+
+        // `ps -ax`, not pgrep: pgrep does not list the claude process that owns the calling shell.
+        let script = """
+        ps -ax -o pid=,comm= | awk '$2 ~ /(^|\\/)claude$/ { print $1 }' | while read -r p; do
+          if ps eww -p "$p" 2>/dev/null | tr ' ' '\\n' | grep -qx "TERM_SESSION_ID=\(sessionId)"; then
+            ps -o tty= -p "$p" | tr -d ' '
+          fi
+        done
+        """
+        guard let raw = shell("/bin/sh", ["-c", script]) else { return nil }
+        let matches = raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        guard let tty = matches.first, matches.count == 1 else {
+            Log.write("PANE", matches.isEmpty ? "no tty for \(sessionId)" : "ambiguous: \(matches.count) ttys")
+            return nil
+        }
+        let device = "/dev/\(tty)"
+        ttyLock.lock()
+        ttyCache[sessionId] = device
+        ttyLock.unlock()
+        return device
+    }
+
+    /// A closed tab's tty is handed out again, so a dead session's mapping must not outlive it.
+    static func forget(pane: String) {
+        ttyLock.lock()
+        ttyCache.removeValue(forKey: pane)
+        ttyLock.unlock()
+    }
+
+    /// Wraps a body so it runs against the Terminal tab on this tty, or yields the empty result.
+    private static func tellTerminal(tty: String, body: String) -> String? {
+        let script = """
+        tell application "Terminal"
+          repeat with wi from 1 to count of windows
+            repeat with ti from 1 to count of tabs of window wi
+              if tty of tab ti of window wi is "\(tty)" then
+                \(body)
+              end if
+            end repeat
+          end repeat
+        end tell
+        return "none"
+        """
+        return shell("/usr/bin/osascript", ["-e", script])
     }
 
     /// Types a key into the pane running this session. Used to pick a numbered option.
     /// Returns false when the pane can't be identified, so the caller never types blindly.
-    static func send(key: TerminalKey, pane: String?, cwd: String, completion: @escaping (Bool) -> Void) {
+    static func send(key: TerminalKey, pane: String?, cwd: String, client: SessionClient, completion: @escaping (Bool) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let guid = resolve(pane: pane, cwd: cwd) else {
-                DispatchQueue.main.async { completion(false) }
-                return
+            let ok: Bool
+            switch resolve(pane: pane, cwd: cwd, client: client) {
+            case .iTerm(let guid): ok = sendITerm(key: key, guid: guid)
+            case .terminal(let tty): ok = sendTerminal(key: key, tty: tty)
+            case nil: ok = false
             }
-            let keystrokes: String
-            switch key {
-            case .option(let number):
-                keystrokes = #"tell s to write text "\#(number)" newline NO"#
-            case .cancel:
-                keystrokes = "tell s to write text (character id 27) newline NO"
-            case .confirm(let steps):
-                // One arrow per write: the prompt reads a chunk as a single key, so two escape
-                // sequences written together move the cursor one row, not two. Measured.
-                let arrow = steps < 0 ? "[A" : "[B"
-                let move = (0..<abs(steps)).map { _ in
-                    "tell s to write text ((character id 27) & \"\(arrow)\") newline NO\ndelay 0.08"
-                }.joined(separator: "\n")
-                // A carriage return, not iTerm's `newline YES`: that sends a line feed, which the
-                // prompt ignores.
-                keystrokes = move + "\ntell s to write text (character id 13) newline NO"
-            case .reply:
-                // Only meaningful for gated sessions, which never reach this path.
-                DispatchQueue.main.async { completion(false) }
-                return
-            case .cancelThenSay(let text):
-                // Escape returns focus to the composer, then the note goes in as an ordinary message.
-                keystrokes = """
-                tell s to write text (character id 27) newline NO
-                delay 0.4
-                tell s to write text "\(escaped(text))"
-                """
-            }
-
-            // Deliberately no select or activate: answering must not pull that session to the front.
-            let script = """
-            tell application "iTerm2"
-              repeat with w in windows
-                repeat with t in tabs of w
-                  repeat with s in sessions of t
-                    if id of s contains "\(guid)" then
-                      \(keystrokes)
-                      return "ok"
-                    end if
-                  end repeat
-                end repeat
-              end repeat
-            end tell
-            return "none"
-            """
-            let ok = shell("/usr/bin/osascript", ["-e", script]) == "ok"
             DispatchQueue.main.async { completion(ok) }
         }
     }
 
+    /// `do script` is Terminal's only way in, and it always appends a return. That is harmless after
+    /// a digit, which the prompt acts on at once, but rules out sending a bare arrow key.
+    private static func sendTerminal(key: TerminalKey, tty: String) -> Bool {
+        let commands: String
+        switch key {
+        case .option(let number):
+            commands = #"do script "\#(number)" in tab ti of window wi"#
+        case .cancel:
+            commands = "do script (character id 27) in tab ti of window wi"
+        case .cancelThenSay(let text):
+            commands = """
+            do script (character id 27) in tab ti of window wi
+            delay 0.4
+            do script "\(escaped(text))" in tab ti of window wi
+            """
+        case .confirm, .reply:
+            return false
+        }
+        return tellTerminal(tty: tty, body: "\(commands)\n            return \"ok\"") == "ok"
+    }
+
+    private static func sendITerm(key: TerminalKey, guid: String) -> Bool {
+        let keystrokes: String
+        switch key {
+        case .option(let number):
+            keystrokes = #"tell s to write text "\#(number)" newline NO"#
+        case .cancel:
+            keystrokes = "tell s to write text (character id 27) newline NO"
+        case .confirm(let steps):
+            // One arrow per write: the prompt reads a chunk as a single key, so two escape
+            // sequences written together move the cursor one row, not two. Measured.
+            let arrow = steps < 0 ? "[A" : "[B"
+            let move = (0..<abs(steps)).map { _ in
+                "tell s to write text ((character id 27) & \"\(arrow)\") newline NO\ndelay 0.08"
+            }.joined(separator: "\n")
+            // A carriage return, not iTerm's `newline YES`: that sends a line feed, which the
+            // prompt ignores.
+            keystrokes = move + "\ntell s to write text (character id 13) newline NO"
+        case .reply:
+            // Only meaningful for gated sessions, which never reach this path.
+            return false
+        case .cancelThenSay(let text):
+            // Escape returns focus to the composer, then the note goes in as an ordinary message.
+            keystrokes = """
+            tell s to write text (character id 27) newline NO
+            delay 0.4
+            tell s to write text "\(escaped(text))"
+            """
+        }
+
+        // Deliberately no select or activate: answering must not pull that session to the front.
+        let script = """
+        tell application "iTerm2"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if id of s contains "\(guid)" then
+                  \(keystrokes)
+                  return "ok"
+                end if
+              end repeat
+            end repeat
+          end repeat
+        end tell
+        return "none"
+        """
+        return shell("/usr/bin/osascript", ["-e", script]) == "ok"
+    }
+
     /// Reads the numbered menu Claude Code is actually showing, so the panel mirrors it
     /// instead of offering options that may not exist in that prompt.
-    static func readMenu(pane: String?, cwd: String, completion: @escaping (TerminalMenu) -> Void) {
+    static func readMenu(pane: String?, cwd: String, client: SessionClient, completion: @escaping (TerminalMenu) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let guid = resolve(pane: pane, cwd: cwd) else {
+            let text: String
+            switch resolve(pane: pane, cwd: cwd, client: client) {
+            case .iTerm(let guid): text = readITerm(guid: guid)
+            case .terminal(let tty): text = readTerminal(tty: tty)
+            case nil:
                 DispatchQueue.main.async { completion(TerminalMenu(options: [], rows: [], cursor: nil)) }
                 return
             }
-            let script = """
-            tell application "iTerm2"
-              repeat with w in windows
-                repeat with t in tabs of w
-                  repeat with s in sessions of t
-                    if id of s contains "\(guid)" then return (text of s)
-                  end repeat
-                end repeat
-              end repeat
-            end tell
-            return ""
-            """
-            let text = shell("/usr/bin/osascript", ["-e", script]) ?? ""
             let menu = parseMenu(text)
             Log.write("MENU", menu.options.isEmpty
                 ? "no numbered menu on screen"
@@ -133,6 +223,28 @@ enum TerminalFocus {
                   }.joined(separator: " | "))
             DispatchQueue.main.async { completion(menu) }
         }
+    }
+
+    private static func readITerm(guid: String) -> String {
+        let script = """
+        tell application "iTerm2"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if id of s contains "\(guid)" then return (text of s)
+              end repeat
+            end repeat
+          end repeat
+        end tell
+        return ""
+        """
+        return shell("/usr/bin/osascript", ["-e", script]) ?? ""
+    }
+
+    /// Terminal needs indexed loops: `repeat with t in tabs of w` cannot coerce `contents` to text.
+    private static func readTerminal(tty: String) -> String {
+        let text = tellTerminal(tty: tty, body: "return (contents of tab ti of window wi) as text") ?? ""
+        return text == "none" ? "" : text
     }
 
     static func parseMenu(_ text: String) -> TerminalMenu {
@@ -260,8 +372,27 @@ enum TerminalFocus {
         return shell("/usr/bin/osascript", ["-e", script]) == "ok"
     }
 
-    private static func activateAnyTerminal() {
-        for id in ["com.googlecode.iterm2", "com.apple.Terminal", "com.microsoft.VSCode"] {
+    @discardableResult
+    private static func focusTerminal(tty: String) -> Bool {
+        let body = """
+        set selected tab of window wi to tab ti of window wi
+                set index of window wi to 1
+                activate
+                return "ok"
+        """
+        return tellTerminal(tty: tty, body: body) == "ok"
+    }
+
+    /// The session's own app goes first, so a Terminal session never surfaces an iTerm window.
+    private static func activateAnyTerminal(client: SessionClient) {
+        let preferred: [String]
+        switch client {
+        case .iTerm: preferred = ["com.googlecode.iterm2"]
+        case .terminal: preferred = ["com.apple.Terminal"]
+        case .vscode: preferred = ["com.microsoft.VSCode"]
+        case .other: preferred = []
+        }
+        for id in preferred + ["com.googlecode.iterm2", "com.apple.Terminal", "com.microsoft.VSCode"] {
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
                 app.activate(options: [.activateAllWindows])
                 return

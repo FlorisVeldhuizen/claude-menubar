@@ -10,8 +10,8 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 
 - macOS 14+, Swift 6 to build
 - Claude Code, with hooks writable in `~/.claude/settings.json`
-- iTerm2 for the keystroke path. Sessions elsewhere — VS Code, another terminal — are handled by
-  gating instead, automatically. See below.
+- iTerm2 or Apple Terminal for the keystroke path. Sessions elsewhere — VS Code, another terminal —
+  are handled by gating instead, automatically. See below.
 
 ## Install
 
@@ -85,11 +85,18 @@ you click ───────────────────────�
 ```
 
 The hook reports the tool, arguments and session; the answer travels by keystroke, because Claude
-Code's prompt is a numbered menu that selects on a digit. That's why answering needs iTerm2.
+Code's prompt is a numbered menu that selects on a digit.
 
 The keystroke waits for the prompt to actually be on screen, and goes only to a pane identified
-exactly — via `ITERM_SESSION_ID`, which command hooks inherit from `claude`. With no identified pane
-the app types nothing and tells you.
+exactly — via `ITERM_SESSION_ID` or `TERM_SESSION_ID`, which command hooks inherit from `claude`.
+With no identified pane the app types nothing and tells you.
+
+The two terminals are addressed differently. iTerm2 exposes a session id on its panes, so the app
+matches that directly and writes with `write text`. Terminal tabs expose only a `tty`, so the app
+reads the session id from the `claude` process, takes its tty, and matches the tab on that. Writing
+there is `do script`, which always appends a return — harmless after a digit, which the prompt acts
+on at once, but it rules out sending a bare arrow key. So a tick list, which needs arrows to reach
+its Submit row, stays in the terminal on Apple Terminal.
 
 **Failure is safe.** With the app not running the connection is refused, which Claude Code treats as
 a non-blocking error, and everything prompts in the terminal as before.
@@ -126,8 +133,11 @@ decision and keystroke in `trace.log`.
 
 ## Limits
 
-- Jumping to a session is iTerm2-only, as is the keystroke path. Porting means two calls in
-  `TerminalFocus.swift`: address a pane, and write a string to it.
+- Jumping to a session works in iTerm2 and Apple Terminal only, as does the keystroke path. Porting
+  to another terminal means two calls in `TerminalFocus.swift`: address a pane, and write a string
+  to it.
+- Tick lists can't be answered from the menu bar on Apple Terminal, because `do script` cannot send
+  a bare arrow key. The card says so and you answer that one in the terminal.
 - Gated sessions see the options a tool declares, but not the ones Claude Code appends to its own
   menu, since there is no rendered menu to read. "Chat about this" is offered explicitly; "Type
   something" and notes are not.

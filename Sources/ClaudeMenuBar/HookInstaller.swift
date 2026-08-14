@@ -5,7 +5,7 @@ import Foundation
 enum HookInstaller {
     static let permissionEvent = "PermissionRequest"
     static let gateEvent = "PreToolUse"
-    /// Run as a child of `claude`, so these inherit ITERM_SESSION_ID and pin the session to one pane.
+    /// Run as a child of `claude`, so these inherit the terminal's session id and pin it to one pane.
     static let paneEvents = ["SessionStart", "UserPromptSubmit"]
 
     static let sessionEvents = [
@@ -29,7 +29,7 @@ enum HookInstaller {
         guard json(hooks[permissionEvent] ?? [:]).contains(paneMarker) else { return false }
         guard json(hooks[gateEvent] ?? [:]).contains(gateURL(port: port)) else { return false }
         guard sessionEvents.allSatisfy({ json(hooks[$0] ?? [:]).contains(eventURL(port: port)) }) else { return false }
-        // A pane event only counts once it is the command hook that reports ITERM_SESSION_ID.
+        // A pane event only counts once it is the command hook that reports the pane.
         return paneEvents.allSatisfy { json(hooks[$0] ?? [:]).contains(paneMarker) }
     }
 
@@ -38,15 +38,32 @@ enum HookInstaller {
     static func refreshIfInstalled(port: UInt16) {
         guard let hooks = load()?["hooks"] as? [String: Any] else { return }
         let ours = json(hooks).contains("127.0.0.1:\(port)")
-        guard ours, !isInstalled(port: port) || !json(hooks).contains("entrypoint") else { return }
+        // Matched against the raw command, never the serialised JSON: a marker searched for there has
+        // to survive escaping, and one searched as a substring can hit the string it must exclude.
+        let ourCommands = commands(hooks).filter { $0.contains("127.0.0.1:\(port)") }
+        let current = !ourCommands.isEmpty && ourCommands.allSatisfy { $0.contains(versionMarker) }
+        guard ours, !isInstalled(port: port) || !current else { return }
         try? install(port: port)
+    }
+
+    /// Bump when the hook body changes, so an install from an older build rewrites itself on launch.
+    static let hookVersion = "2"
+    static var versionMarker: String { #"d["hook_version"]="\#(hookVersion)""# }
+
+    private static func commands(_ hooks: [String: Any]) -> [String] {
+        hooks.values
+            .compactMap { $0 as? [[String: Any]] }
+            .flatMap { $0 }
+            .compactMap { $0["hooks"] as? [[String: Any]] }
+            .flatMap { $0 }
+            .compactMap { $0["command"] as? String }
     }
 
     static func install(port: UInt16) throws {
         var settings = load() ?? [:]
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
 
-        // A command hook so every permission request carries its own ITERM_SESSION_ID.
+        // A command hook so every permission request carries its own pane id.
         hooks[permissionEvent] = merge(
             into: hooks[permissionEvent],
             entry: paneEntry(port: port, url: permissionURL(port: port), relayResponse: true, matcher: "*"),
@@ -122,7 +139,8 @@ enum HookInstaller {
         import sys,json,os,urllib.request as u
         try:
             d=json.load(sys.stdin)
-            d["term_session"]=os.environ.get("ITERM_SESSION_ID","")
+            d["term_session"]=os.environ.get("ITERM_SESSION_ID","") or os.environ.get("TERM_SESSION_ID","")
+            d["hook_version"]="\(hookVersion)"
             d["term_program"]=os.environ.get("TERM_PROGRAM","")
             d["entrypoint"]=os.environ.get("CLAUDE_CODE_ENTRYPOINT","")
             r=u.urlopen(u.Request("\(target)", json.dumps(d).encode(), {"Content-Type":"application/json"}), timeout=\(timeout))

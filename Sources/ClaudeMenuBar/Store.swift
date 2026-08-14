@@ -88,7 +88,12 @@ final class Store {
     func gate(_ event: HookEvent) async -> DecisionResult {
         let tool = event.toolName ?? "Tool"
         let sessionId = event.sessionId ?? "unknown"
-        let reachable = !(event.termSession ?? "").isEmpty
+        let client = SessionClient.from(
+            entrypoint: event.entrypoint,
+            termProgram: event.termProgram,
+            pane: event.termSession
+        )
+        let reachable = !(event.termSession ?? "").isEmpty && client.typeable
         let project = Transcript.projectPath(from: event.transcriptPath) ?? event.cwd
 
         if reachable || Self.alwaysSafe.contains(tool) { return DecisionResult(decision: .ask, message: nil) }
@@ -162,7 +167,7 @@ final class Store {
         guard !reading.contains(id) else { return }
         reading.insert(id)
         let startedAt = Date()
-        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
+        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId)) { [weak self] menu in
             Task { @MainActor in
                 guard let self else { return }
                 self.reading.remove(id)
@@ -226,7 +231,8 @@ final class Store {
     private func forget(_ sessionId: String) {
         clients.removeValue(forKey: sessionId)
         answered.removeValue(forKey: sessionId)
-        guard panes.removeValue(forKey: sessionId) != nil else { return }
+        guard let pane = panes.removeValue(forKey: sessionId) else { return }
+        TerminalFocus.forget(pane: pane)
         Persistence.savePanes(panes)
     }
 
@@ -330,7 +336,7 @@ final class Store {
             keepingCard(request, key: .confirm(steps: submitRow - cursor), what: "submit")
             return
         }
-        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
+        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId)) { [weak self] menu in
             Task { @MainActor in
                 guard let self else { return }
                 guard let submitRow = menu.submitRow, let cursor = menu.cursor else {
@@ -349,11 +355,13 @@ final class Store {
     private func keepingCard(_ request: PendingRequest, key: TerminalKey, what: String) {
         notice = nil
         Log.write("KEY", "\(what) session=\(request.sessionId)")
-        TerminalFocus.send(key: key, pane: panes[request.sessionId], cwd: request.cwd) { [weak self] ok in
+        TerminalFocus.send(key: key, pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId)) { [weak self] ok in
             Task { @MainActor in
                 guard let self else { return }
                 guard ok else {
-                    self.notice = "Could not tell which pane \(request.folder) is in — answer it in the terminal."
+                    self.notice = self.client(for: request.sessionId) == .terminal
+                        ? "Terminal can't be sent an arrow key, so \(request.folder)'s tick list has to be submitted there."
+                        : "Could not tell which pane \(request.folder) is in — answer it in the terminal."
                     self.onChange?()
                     return
                 }
@@ -369,7 +377,7 @@ final class Store {
         Log.write("KEY", "send \(key) session=\(session) pane=\(pane ?? "-")")
         promptShowing.remove(session)
         let request = answered[session]
-        TerminalFocus.send(key: key, pane: pane, cwd: cwd) { [weak self] ok in
+        TerminalFocus.send(key: key, pane: pane, cwd: cwd, client: client(for: session)) { [weak self] ok in
             Log.write("KEY", ok ? "delivered" : "FAILED to reach pane")
             guard !ok, let self, let request else { return }
             Task { @MainActor in self.deliveryFailed(request) }
@@ -380,7 +388,9 @@ final class Store {
     private func deliveryFailed(_ request: PendingRequest) {
         if !pending.contains(where: { $0.id == request.id }) { pending.append(request) }
         focusedRequestId = request.id
-        notice = "Could not tell which pane \(request.folder) is in — answer it in the terminal."
+        notice = request.isTickList && client(for: request.sessionId) == .terminal
+            ? "Terminal can't be sent an arrow key, so \(request.folder)'s tick list has to be submitted there."
+            : "Could not tell which pane \(request.folder) is in — answer it in the terminal."
         onChange?()
         TerminalFocus.reveal(pane: panes[request.sessionId], cwd: request.cwd, client: client(for: request.sessionId))
     }
@@ -491,7 +501,8 @@ final class Store {
                 state: .running,
                 lastActivity: Date(),
                 agentType: nil,
-                pane: process.pane
+                pane: process.pane,
+                client: process.client
             )
         }
         guard fresh.map(\.id) != discovered.map(\.id) else { return }

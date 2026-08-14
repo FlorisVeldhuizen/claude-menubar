@@ -106,14 +106,18 @@ enum SessionClient: String {
 
     static func from(entrypoint: String?, termProgram: String?, pane: String?) -> SessionClient {
         if let entrypoint, entrypoint.contains("vscode") { return .vscode }
-        if let pane, !pane.isEmpty { return .iTerm }
         switch termProgram {
         case "iTerm.app": return .iTerm
         case "vscode": return .vscode
         case "Apple_Terminal": return .terminal
-        default: return .other
+        default: break
         }
+        // Only reached for a hook installed before term_program was reported.
+        return (pane?.isEmpty == false) ? .iTerm : .other
     }
+
+    /// True where the app can type an answer into the session's own pane.
+    var typeable: Bool { self == .iTerm || self == .terminal }
 
     var label: String {
         switch self {
