@@ -13,6 +13,12 @@ struct RequestCard: View {
         static let answerRow: CGFloat = 26
         static let noteRow: CGFloat = 54
         static let smallestDetail: CGFloat = 60
+        /// How tall the card may grow before the session list below it gets too thin to be useful.
+        static let tallestCard: CGFloat = 380
+        /// Everything in the card that isn't the detail box: title row, buttons, paddings, spacings.
+        static let cardChrome: CGFloat = 108
+        /// The text width inside the detail box, for measuring how many lines the content takes.
+        static let textWidth: CGFloat = ConsoleView.size.width - 60
         /// Claude's own menu is usually three lines. Holding that much room from the start means the
         /// card doesn't reshuffle when the real options arrive a few seconds later.
         static let expectedOptions = 3
@@ -313,11 +319,51 @@ struct RequestCard: View {
         return max(answers.count, 1) + (choices == nil ? 0 : 1)
     }
 
-    /// The card sits in a fixed slot, so the detail box gives up whatever the answer rows need.
+    /// The detail box asks for as many lines as the text actually needs, and gets them as long as the
+    /// session list keeps a usable strip below. It never goes below the height it always had, so a
+    /// short question looks exactly as it did.
     private var detailHeight: CGFloat {
-        var height = Layout.detailBox - CGFloat(reservedRows) * Layout.answerRow
-        if noteTarget == request.id { height -= Layout.noteRow }
-        return max(height, Layout.smallestDetail)
+        let taken = CGFloat(reservedRows) * Layout.answerRow
+            + (noteTarget == request.id ? Layout.noteRow : 0)
+        let floor = max(Layout.detailBox - taken, Layout.smallestDetail)
+        let ceiling = max(Layout.tallestCard - Layout.cardChrome - taken, floor)
+        return min(max(measuredHeight, floor), ceiling)
+    }
+
+    /// Measured rather than guessed from the character count: a wrapped line is the thing that costs
+    /// height, and only the font and the width know where it wraps.
+    private var measuredHeight: CGFloat {
+        let caption = NSFont.systemFont(ofSize: 11)
+        var height: CGFloat = 14 // the box's own padding
+        if !request.context.isEmpty {
+            height += lines(request.context, font: caption) + 8
+        }
+        if request.questions.isEmpty {
+            height += lines(request.detail, font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular))
+        } else {
+            for question in request.questions {
+                height += lines(question.text, font: NSFont.boldSystemFont(ofSize: 11)) + 5
+                for option in question.options {
+                    height += lines(option.label, font: NSFont.systemFont(ofSize: 11)) + 1
+                    if !option.detail.isEmpty {
+                        height += lines(option.detail, font: NSFont.systemFont(ofSize: 10), inset: 12)
+                    }
+                    height += 5
+                }
+            }
+        }
+        return height
+    }
+
+    private func lines(_ text: String, font: NSFont, inset: CGFloat = 0) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let box = NSSize(width: Layout.textWidth - inset, height: .greatestFiniteMagnitude)
+        let rect = (text as NSString).boundingRect(
+            with: box,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        return ceil(rect.height)
     }
 
     private var ruleHelp: String {
