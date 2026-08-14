@@ -196,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             store.panelOpen = true
             store.verifyPending()
             store.refreshTitles()
+            store.refreshLoginItem()
         }
     }
 
@@ -238,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func showMenu() {
+        store.refreshLoginItem()
         let menu = NSMenu()
         menu.addItem(withTitle: Self.buildLine, action: nil, keyEquivalent: "").isEnabled = false
         menu.addItem(withTitle: "About Permission Relay", action: #selector(showAbout), keyEquivalent: "").target = self
@@ -266,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         soundItem.submenu = sounds
         let login = menu.addItem(withTitle: "Open at login", action: #selector(toggleLoginItem), keyEquivalent: "")
         login.target = self
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        login.state = store.opensAtLogin ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -275,18 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func toggleLoginItem() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "Could not change the login item"
-            alert.informativeText = "This usually works only once the app is in /Applications."
-            alert.runModal()
-        }
+        store.toggleLoginItem()
     }
 
     @objc private func pickSound(_ item: NSMenuItem) {

@@ -437,6 +437,7 @@ private struct PanelMenu: View {
             }
             Divider()
             Button(store.hooksInstalled ? "Remove hooks" : "Install hooks", action: onInstallHooks)
+            Toggle("Open at login", isOn: Binding(get: { store.opensAtLogin }, set: { _ in store.toggleLoginItem() }))
             Divider()
             Button("About Permission Relay", action: onAbout)
             Button("Quit", action: onQuit)

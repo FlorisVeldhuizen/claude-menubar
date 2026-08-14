@@ -558,6 +558,23 @@ final class Store {
         }
     }
 
+    // MARK: - Open at login
+
+    /// Mirrored here so both menus agree on the tick, and re-read on open in case it was changed in
+    /// System Settings meanwhile.
+    private(set) var opensAtLogin = LoginItem.isEnabled
+
+    func toggleLoginItem() {
+        LoginItem.toggle()
+        opensAtLogin = LoginItem.isEnabled
+    }
+
+    func refreshLoginItem() {
+        let enabled = LoginItem.isEnabled
+        guard opensAtLogin != enabled else { return }
+        opensAtLogin = enabled
+    }
+
     // MARK: - Alert sound
 
     private(set) var alertSound = Sound.current

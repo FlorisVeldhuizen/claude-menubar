@@ -20,7 +20,9 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 ```
 
 That builds it, copies it to `/Applications` and launches it. Without `--install` it stays in
-`build/`. To start it with your Mac, right-click the menu bar icon and tick **Open at login**.
+`build/`. To start it with your Mac, tick **Open at login** in the panel's **⋯** menu or in the
+right-click menu on the icon. It registers the bundle where it stands, so tick it again if you move
+the app.
 
 Then open the panel and press **Install hooks**. That writes the hook entries into
 `~/.claude/settings.json`, backing up the old file alongside it and leaving your existing hooks
