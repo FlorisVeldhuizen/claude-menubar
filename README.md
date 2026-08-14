@@ -36,7 +36,7 @@ never see an option that doesn't exist.
 | Button | Effect |
 | :-- | :-- |
 | Claude's own options | Answers the prompt with that choice |
-| **Say why…** | Cancels the prompt and sends Claude your message instead |
+| **Say what to do instead…** | Cancels the prompt and sends Claude your message instead |
 | **Terminal** | Jumps to that pane; the card stays until the prompt is settled |
 
 A question that takes several answers draws a tick box on each option. Clicking one ticks it and
@@ -141,8 +141,8 @@ regenerates `Resources/AppIcon.icns` from it.
   appends a return and so cannot send a bare arrow key. The card says so; answer that one in the
   terminal.
 - Sessions with no pane see the options a tool declares, but not the ones Claude Code appends to its
-  own menu, since there is no rendered menu to read. "Chat about this" is offered explicitly; "Type
-  something" and notes are not.
+  own menu, since there is no rendered menu to read. "Say what to do instead" is offered explicitly;
+  "Type something" and notes are not.
 - Headless `claude -p` runs have no prompt to intercept.
 - Sessions on another machine can't reach your loopback.
 

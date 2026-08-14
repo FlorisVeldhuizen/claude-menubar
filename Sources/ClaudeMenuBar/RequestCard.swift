@@ -59,6 +59,15 @@ struct RequestCard: View {
 
     private static let shape = RoundedRectangle(cornerRadius: 8)
 
+    /// The button refuses the prompt as well as sending the message, so it is named for the whole act.
+    private static let noteLabel = "Say what to do instead…"
+
+    private var noteHelp: String {
+        request.gated
+            ? "⌘K · deny this and send Claude a message instead"
+            : "⌘K · cancel the prompt and send Claude a message instead"
+    }
+
     private var stack: some View {
         VStack(alignment: .leading, spacing: 8) {
             titleRow
@@ -224,10 +233,10 @@ struct RequestCard: View {
             }
             // Claude Code appends this to its own menu; a gated card only sees the declared options.
             if request.gated {
-                Button("Chat about this…", action: toggleNote)
+                Button(Self.noteLabel, action: toggleNote)
                     .buttonStyle(AnswerButtonStyle(kind: .quiet))
                     .keyboardShortcut("k", modifiers: .command)
-                    .help("⌘K")
+                    .help(noteHelp)
             }
         }
     }
@@ -281,10 +290,10 @@ struct RequestCard: View {
                 .help(ruleHelp)
             }
             if choices == nil {
-                Button("Say why…", action: toggleNote)
+                Button(Self.noteLabel, action: toggleNote)
                     .controlSize(.small)
                     .keyboardShortcut("k", modifiers: .command)
-                    .help("⌘K · cancel the prompt and send Claude a message instead")
+                    .help(noteHelp)
             }
             Spacer()
             if !request.gated {
