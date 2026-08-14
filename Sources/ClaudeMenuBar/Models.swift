@@ -32,6 +32,9 @@ enum TerminalKey: CustomStringConvertible {
     case option(Int)
     case cancel
     case cancelThenSay(String)
+    /// Moves the cursor that many rows, then presses Return. Return acts on the row the cursor is on,
+    /// so confirming a tick list means walking to its Submit row first.
+    case confirm(steps: Int)
     /// Gated sessions only: block the call and hand Claude the answer as the reason.
     case reply(String)
 
@@ -39,6 +42,7 @@ enum TerminalKey: CustomStringConvertible {
         switch self {
         case .option(let n): return "option \(n)"
         case .cancel: return "escape"
+        case .confirm(let steps): return "confirm \(steps) rows down"
         case .cancelThenSay(let text): return "escape + \"\(text.prefix(40))\""
         case .reply(let text): return "reply \"\(text.prefix(40))\""
         }
@@ -78,9 +82,20 @@ enum SessionState: String {
         switch self {
         case .working: return "working"
         case .waiting: return "needs you"
-        case .done: return "finished"
-        case .idle: return "idle"
-        case .running: return "running"
+        case .done: return "finished its turn"
+        case .idle: return "waiting for your prompt"
+        case .running: return "not reporting yet"
+        }
+    }
+
+    /// Spelled out on the row, because five short labels on their own don't say what to do about them.
+    var meaning: String {
+        switch self {
+        case .working: return "Claude is running. Nothing to do."
+        case .waiting: return "Claude is blocked on a decision. Answer it here."
+        case .done: return "Claude finished its turn and is waiting for you. Goes quiet after 10 minutes."
+        case .idle: return "Quiet. Claude is waiting for your next prompt."
+        case .running: return "A claude process we found, but it has not reported through the hooks yet, so it can't be answered from here."
         }
     }
 }
@@ -125,6 +140,34 @@ struct SessionInfo: Identifiable {
     }
 }
 
+/// One row of the menu Claude Code has on screen. A row with no number is the Submit row.
+struct Row {
+    let number: Int?
+    let label: String
+    let onCursor: Bool
+}
+
+struct TerminalMenu {
+    let options: [String]
+    let rows: [Row]
+    let cursor: Int?
+
+    var submitRow: Int? { rows.firstIndex { $0.number == nil } }
+}
+
+struct SessionGroup: Identifiable {
+    let title: String
+    let sessions: [SessionInfo]
+
+    var id: String { title }
+}
+
+struct MenuOption {
+    let label: String
+    /// nil where the option is a plain action rather than one of the boxes.
+    let ticked: Bool?
+}
+
 struct AskOption: Identifiable {
     let id = UUID()
     let label: String
@@ -154,6 +197,32 @@ struct PendingRequest: Identifiable {
 
     var folder: String {
         cwd.isEmpty ? "unknown" : (cwd as NSString).lastPathComponent
+    }
+
+    /// Claude Code draws a tick box on every option of a multiple-choice question, and nothing on a
+    /// plain menu. So the box is how we know a digit ticks rather than answers.
+    var menu: [MenuOption] {
+        terminalOptions.map { raw in
+            guard raw.hasPrefix("["), let close = raw.firstIndex(of: "]") else {
+                return MenuOption(label: raw, ticked: nil)
+            }
+            let mark = raw[raw.index(after: raw.startIndex)..<close].trimmingCharacters(in: .whitespaces)
+            let label = raw[raw.index(after: close)...].trimmingCharacters(in: .whitespaces)
+            return MenuOption(label: String(label), ticked: !mark.isEmpty)
+        }
+    }
+
+    var isTickList: Bool { menu.contains { $0.ticked != nil } }
+
+    /// Ticking goes through the terminal and back, which takes about a second. The box flips here
+    /// first so the click feels immediate, and the next read replaces it with the real one.
+    mutating func flipTick(option: Int) {
+        let index = option - 1
+        guard terminalOptions.indices.contains(index) else { return }
+        let raw = terminalOptions[index]
+        guard raw.hasPrefix("["), let close = raw.firstIndex(of: "]") else { return }
+        let mark = raw[raw.index(after: raw.startIndex)..<close].trimmingCharacters(in: .whitespaces)
+        terminalOptions[index] = (mark.isEmpty ? "[✔]" : "[ ]") + raw[raw.index(after: close)...]
     }
 
     /// The one field that matters per tool, so the card shows the decision-relevant text.

@@ -55,6 +55,16 @@ enum TerminalFocus {
                 keystrokes = #"tell s to write text "\#(number)" newline NO"#
             case .cancel:
                 keystrokes = "tell s to write text (character id 27) newline NO"
+            case .confirm(let steps):
+                // One arrow per write: the prompt reads a chunk as a single key, so two escape
+                // sequences written together move the cursor one row, not two. Measured.
+                let arrow = steps < 0 ? "[A" : "[B"
+                let move = (0..<abs(steps)).map { _ in
+                    "tell s to write text ((character id 27) & \"\(arrow)\") newline NO\ndelay 0.15"
+                }.joined(separator: "\n")
+                // A carriage return, not iTerm's `newline YES`: that sends a line feed, which the
+                // prompt ignores.
+                keystrokes = move + "\ntell s to write text (character id 13) newline NO"
             case .reply:
                 // Only meaningful for gated sessions, which never reach this path.
                 DispatchQueue.main.async { completion(false) }
@@ -91,10 +101,10 @@ enum TerminalFocus {
 
     /// Reads the numbered menu Claude Code is actually showing, so the panel mirrors it
     /// instead of offering options that may not exist in that prompt.
-    static func readOptions(pane: String?, cwd: String, completion: @escaping ([String]) -> Void) {
+    static func readMenu(pane: String?, cwd: String, completion: @escaping (TerminalMenu) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             guard let guid = resolve(pane: pane, cwd: cwd) else {
-                DispatchQueue.main.async { completion([]) }
+                DispatchQueue.main.async { completion(TerminalMenu(options: [], rows: [], cursor: nil)) }
                 return
             }
             let script = """
@@ -110,33 +120,53 @@ enum TerminalFocus {
             return ""
             """
             let text = shell("/usr/bin/osascript", ["-e", script]) ?? ""
-            let options = parseOptions(text)
-            Log.write("MENU", options.isEmpty ? "no numbered menu on screen" : "read \(options.count): \(options.joined(separator: " | "))")
-            DispatchQueue.main.async { completion(options) }
+            let menu = parseMenu(text)
+            Log.write("MENU", menu.options.isEmpty
+                ? "no numbered menu on screen"
+                : "read \(menu.options.count) cursor=\(menu.cursor.map(String.init) ?? "-"): \(menu.options.joined(separator: " | "))")
+            DispatchQueue.main.async { completion(menu) }
         }
     }
 
-    static func parseOptions(_ text: String) -> [String] {
-        var runs: [[Int: String]] = [[:]]
+    static func parseMenu(_ text: String) -> TerminalMenu {
+        var runs: [[Row]] = [[]]
         for line in text.components(separatedBy: .newlines) {
+            let onCursor = line.contains("❯")
             let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t❯>›"))
+            // The Submit row carries no number, so it is recognised by its own text.
+            if trimmed == "Submit" {
+                guard !runs[runs.count - 1].isEmpty else { continue }
+                runs[runs.count - 1].append(Row(number: nil, label: trimmed, onCursor: onCursor))
+                continue
+            }
             guard let dot = trimmed.firstIndex(of: "."),
                   let number = Int(trimmed[trimmed.startIndex..<dot]), number > 0, number < 20
             else { continue }
             let label = trimmed[trimmed.index(after: dot)...].trimmingCharacters(in: .whitespaces)
             guard !label.isEmpty else { continue }
             // A number we already have starts a fresh menu rather than extending this one.
-            if runs[runs.count - 1][number] != nil { runs.append([:]) }
-            runs[runs.count - 1][number] = label
+            if runs[runs.count - 1].contains(where: { $0.number == number }) { runs.append([]) }
+            runs[runs.count - 1].append(Row(number: number, label: label, onCursor: onCursor))
         }
-        guard let last = runs.last(where: { $0[1] != nil }) else { return [] }
-        var options: [String] = []
-        var index = 1
-        while let label = last[index] {
-            options.append(label)
-            index += 1
+
+        guard let last = runs.last(where: { run in run.contains { $0.number == 1 } }) else {
+            return TerminalMenu(options: [], rows: [], cursor: nil)
         }
-        return options
+        // Only a menu numbered straight through from 1 is trusted; a gap means we read something else.
+        var rows: [Row] = []
+        var expected = 1
+        for row in last {
+            if let number = row.number {
+                guard number == expected else { continue }
+                expected += 1
+            }
+            rows.append(row)
+        }
+        return TerminalMenu(
+            options: rows.compactMap { $0.number == nil ? nil : $0.label },
+            rows: rows,
+            cursor: rows.firstIndex { $0.onCursor }
+        )
     }
 
     private static func escaped(_ text: String) -> String {

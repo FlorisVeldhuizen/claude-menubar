@@ -24,6 +24,8 @@ struct RequestCard: View {
         let id: Int
         let label: String
         let key: TerminalKey
+        /// Set only on a multiple-choice question, where the digit ticks a box instead of answering.
+        var ticked: Bool?
     }
 
     var body: some View {
@@ -54,8 +56,8 @@ struct RequestCard: View {
             }
         }
         if !request.gated {
-            return request.terminalOptions.enumerated().map { index, label in
-                Answer(id: index, label: label, key: .option(index + 1))
+            return request.menu.enumerated().map { index, option in
+                Answer(id: index, label: option.label, key: .option(index + 1), ticked: option.ticked)
             }
         }
         return []
@@ -72,9 +74,17 @@ struct RequestCard: View {
     /// Command digits rather than plain ones, so typing into the note field still works.
     private var shortcuts: some View {
         ForEach(answers.prefix(9)) { answer in
-            Button("") { store.answer(request, key: answer.key) }
+            Button("") { pick(answer) }
                 .keyboardShortcut(KeyEquivalent(Character("\(answer.id + 1)")), modifiers: .command)
                 .hidden()
+        }
+    }
+
+    private func pick(_ answer: Answer) {
+        if answer.ticked == nil {
+            store.answer(request, key: answer.key)
+        } else {
+            store.tick(request, option: answer.id + 1)
         }
     }
 
@@ -158,14 +168,27 @@ struct RequestCard: View {
         VStack(spacing: 4) {
             ForEach(answers) { answer in
                 Button {
-                    store.answer(request, key: answer.key)
+                    pick(answer)
                 } label: {
-                    Text("\(answer.id + 1). \(answer.label)")
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 5) {
+                        if let ticked = answer.ticked {
+                            Image(systemName: ticked ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(ticked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                        }
+                        Text("\(answer.id + 1). \(answer.label)")
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .controlSize(.small)
                 .help(answer.id < 9 ? "⌘\(answer.id + 1)" : answer.label)
+            }
+            // A tick list stays on screen until Return, so the card has to offer that key too.
+            if request.isTickList {
+                Button("Submit") { store.submit(request) }
+                    .controlSize(.small)
+                    .keyboardShortcut(.defaultAction)
+                    .help("⌘↩ · send the ticked options")
             }
             // Claude Code appends this to its own menu; a gated card only sees the declared options.
             if request.gated {
@@ -284,7 +307,9 @@ struct RequestCard: View {
     /// A gated card never changes shape, so it only reserves what it shows. A terminal one holds room
     /// for the menu it is about to mirror, so nothing moves when that menu arrives.
     private var reservedRows: Int {
-        guard request.gated else { return max(answers.count, Layout.expectedOptions) }
+        guard request.gated else {
+            return max(answers.count + (request.isTickList ? 1 : 0), Layout.expectedOptions)
+        }
         return max(answers.count, 1) + (choices == nil ? 0 : 1)
     }
 

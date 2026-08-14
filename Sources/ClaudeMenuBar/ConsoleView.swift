@@ -27,16 +27,19 @@ struct ConsoleView: View {
                         installBanner
                     }
 
-                    section("Sessions")
                     if store.allSessions.isEmpty {
+                        section("Sessions")
                         Text("No sessions yet. Start Claude Code in any project.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 12)
                             .padding(.bottom, 6)
                     } else {
-                        ForEach(store.allSessions) { session in
-                            sessionRow(session)
+                        ForEach(store.sessionGroups) { group in
+                            section(group.title)
+                            ForEach(group.sessions) { session in
+                                sessionRow(session)
+                            }
                         }
                     }
                 }
@@ -229,7 +232,7 @@ struct ConsoleView: View {
                     .truncationMode(.middle)
                 Text(session.agentType.map { "\(session.state.label) · \($0)" } ?? session.state.label)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(stateStyle(for: session.state))
                     .lineLimit(1)
             }
 
@@ -280,7 +283,12 @@ struct ConsoleView: View {
                 store.jump(to: session)
             }
         }
-        .help(waiting > 0 ? "Click to answer this session's request" : "Click to jump to \(session.cwd)")
+        .help("\(session.state.meaning)\n\n\(clickHint(waiting: waiting, session: session))")
+    }
+
+    private func clickHint(waiting: Int, session: SessionInfo) -> String {
+        if waiting > 0 { return "Click to bring its request up here." }
+        return "Click to jump to \(session.cwd.isEmpty ? "its terminal" : session.cwd)."
     }
 
     private func color(for state: SessionState) -> Color {
@@ -290,6 +298,14 @@ struct ConsoleView: View {
         case .done: return .green
         case .idle: return Color.secondary.opacity(0.45)
         case .running: return Color.secondary.opacity(0.25)
+        }
+    }
+
+    /// The live states carry their own colour, so a row that needs you reads differently from a quiet one.
+    private func stateStyle(for state: SessionState) -> AnyShapeStyle {
+        switch state {
+        case .waiting, .working, .done: return AnyShapeStyle(color(for: state))
+        case .idle, .running: return AnyShapeStyle(.secondary)
         }
     }
 

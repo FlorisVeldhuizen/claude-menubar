@@ -38,17 +38,22 @@ Below that, every live session:
 
 | State | Meaning |
 | :-- | :-- |
-| **needs you** | orange — waiting on a decision |
+| **needs you** | orange — Claude is blocked on a decision; answer it here |
 | **working** | blue — running now |
-| **finished** | green — just completed a turn; reverts to idle after 10 minutes |
-| **idle** | grey — quiet |
-| **running** | faint — a live process that hasn't reported in yet |
+| **finished its turn** | green — done and waiting for you; goes quiet after 10 minutes |
+| **waiting for your prompt** | grey — quiet |
+| **not reporting yet** | faint — a live `claude` we found, but no hooks have arrived, so it can't be answered from here |
+
+Hover a row for the same thing in full, plus what a click does.
 
 | Button | Effect |
 | :-- | :-- |
 | Claude's own options | Answers the prompt with that choice |
 | **Say why…** | Cancels the prompt and sends Claude your message instead |
 | **Terminal** | Jumps to that pane; the card stays until the prompt is settled |
+
+A question that takes several answers draws a tick box on each option. Clicking one ticks it and
+leaves the card up, because that prompt only closes on Return — **Submit** sends it.
 
 Answering never pulls a session to the front — that's the point. Focus moves only via **Terminal**,
 the card's header, or clicking a session with no pending request.

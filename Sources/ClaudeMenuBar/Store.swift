@@ -9,6 +9,22 @@ final class Store {
 
     /// Hook-tracked sessions first, then any live process we have not heard from.
     var allSessions: [SessionInfo] { sessions + discovered }
+
+    /// Grouped by state, so a session that needs you is never listed below three quiet ones.
+    /// Order within a group is left alone; sorting live sessions by activity would shuffle them.
+    var sessionGroups: [SessionGroup] {
+        let all = allSessions
+        let order: [(String, [SessionState])] = [
+            ("Needs you", [.waiting]),
+            ("Working", [.working]),
+            ("Finished", [.done]),
+            ("Quiet", [.idle, .running]),
+        ]
+        return order.compactMap { title, states in
+            let members = all.filter { states.contains($0.state) }
+            return members.isEmpty ? nil : SessionGroup(title: title, sessions: members)
+        }
+    }
     private(set) var pending: [PendingRequest] = []
     private(set) var autoAllow: Set<String> = []
     var hooksInstalled = false
@@ -53,6 +69,9 @@ final class Store {
     private var promptShowing: Set<String> = []
     private var answered: [String: PendingRequest] = [:]
     private var gateWaiters: [String: CheckedContinuation<DecisionResult, Never>] = [:]
+    private var wentQuiet: Set<String> = []
+    private var reading: Set<String> = []
+    private var lastKeyAt: [String: Date] = [:]
 
     /// Read-only work is allowed straight through; gating every call would drown the panel.
     private static let alwaysSafe: Set<String> = [
@@ -118,14 +137,27 @@ final class Store {
     func verifyPending() {
         for request in pending where !request.gated {
             let id = request.id
-            TerminalFocus.readOptions(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] options in
+            // One read at a time per card, and none that started before the last keystroke: two reads
+            // in flight land in either order, and the older one puts the ticks back as they were.
+            guard !reading.contains(id) else { continue }
+            reading.insert(id)
+            let startedAt = Date()
+            TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
                 Task { @MainActor in
-                    guard let self, let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
+                    guard let self else { return }
+                    self.reading.remove(id)
+                    let options = menu.options
+                    if let typed = self.lastKeyAt[id], typed > startedAt { return }
+                    guard let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
                     if options.isEmpty {
                         guard !self.pending[index].terminalOptions.isEmpty else { return }
+                        // A tool that asks several questions redraws between them, so one empty read
+                        // is not proof the prompt has gone.
+                        if self.pending[index].isTickList, self.wentQuiet.insert(id).inserted { return }
                         Log.write("CARD", "prompt gone from screen")
                         self.expire(id)
                     } else if self.pending[index].terminalOptions != options {
+                        self.wentQuiet.remove(id)
                         self.pending[index].terminalOptions = options
                         self.onChange?()
                     }
@@ -220,12 +252,13 @@ final class Store {
         notice = nil
         answered[request.sessionId] = request
         pending.removeAll { $0.id == request.id }
+        settle(request.sessionId)
         if focusedRequestId == request.id { focusedRequestId = nil }
         onChange?()
 
         if request.gated {
             switch key {
-            case .option: releaseGate(request.id, decision: .allow)
+            case .option, .confirm: releaseGate(request.id, decision: .allow)
             case .cancel: releaseGate(request.id, decision: .deny, message: "Denied from the menu bar.")
             case .cancelThenSay(let text): releaseGate(request.id, decision: .deny, message: text)
             case .reply(let text): releaseGate(request.id, decision: .deny, message: text)
@@ -241,6 +274,54 @@ final class Store {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(8))
                 self?.flushKey(request.sessionId)
+            }
+        }
+    }
+
+    /// Ticks one box of a multiple-choice question, flipping it here first so the click lands at once.
+    func tick(_ request: PendingRequest, option: Int) {
+        if let index = pending.firstIndex(where: { $0.id == request.id }) {
+            pending[index].flipTick(option: option)
+            onChange?()
+        }
+        keepingCard(request, key: .option(option), what: "tick option \(option)")
+    }
+
+    /// Confirms a multiple-choice question. Return acts on whatever row the cursor is on, so the menu
+    /// is read first to find out how far the Submit row is from there. The card stays: one tool call
+    /// can ask several questions in turn, and the next one is drawn in the same place.
+    func submit(_ request: PendingRequest) {
+        notice = nil
+        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let submitRow = menu.submitRow, let cursor = menu.cursor else {
+                    self.notice = "Can't see where \(request.folder)'s Submit row is — send it in the terminal."
+                    self.onChange?()
+                    Log.write("KEY", "submit skipped: submit=\(menu.submitRow.map(String.init) ?? "-") cursor=\(menu.cursor.map(String.init) ?? "-")")
+                    return
+                }
+                self.keepingCard(request, key: .confirm(steps: submitRow - cursor), what: "submit")
+            }
+        }
+    }
+
+    /// Unlike answering, these keys leave a prompt on screen, so the card lives until a read finds
+    /// no menu left.
+    private func keepingCard(_ request: PendingRequest, key: TerminalKey, what: String) {
+        notice = nil
+        Log.write("KEY", "\(what) session=\(request.sessionId)")
+        TerminalFocus.send(key: key, pane: panes[request.sessionId], cwd: request.cwd) { [weak self] ok in
+            Task { @MainActor in
+                guard let self else { return }
+                guard ok else {
+                    self.notice = "Could not tell which pane \(request.folder) is in — answer it in the terminal."
+                    self.onChange?()
+                    return
+                }
+                self.lastKeyAt[request.id] = Date()
+                try? await Task.sleep(for: .milliseconds(400))
+                self.verifyPending()
             }
         }
     }
@@ -268,10 +349,12 @@ final class Store {
 
     /// Drops a request whose session is gone or whose hook timed out, so a dead card can't sit there.
     private func expire(_ id: String) {
-        guard pending.contains(where: { $0.id == id }) else { return }
+        guard let request = pending.first(where: { $0.id == id }) else { return }
         releaseGate(id, decision: .ask)
         Log.write("CARD", "removed id=\(id)")
+        wentQuiet.remove(id)
         pending.removeAll { $0.id == id }
+        settle(request.sessionId)
         if focusedRequestId == id { focusedRequestId = nil }
         onChange?()
     }
@@ -293,8 +376,13 @@ final class Store {
     /// Claude Code only fires SessionEnd on a clean exit, so quiet sessions are dropped on a timer.
     func sweep(staleAfter: TimeInterval) {
         let settled = Date().addingTimeInterval(-10 * 60)
-        for index in sessions.indices where sessions[index].state == .done && sessions[index].lastActivity < settled {
-            sessions[index].state = .idle
+        for index in sessions.indices where sessions[index].lastActivity < settled {
+            switch sessions[index].state {
+            case .done: sessions[index].state = .idle
+            // A notification claimed a prompt we never got a card for; ten minutes on, it is gone.
+            case .waiting where !hasPending(sessions[index].id): sessions[index].state = .idle
+            default: break
+            }
         }
         let cutoff = Date().addingTimeInterval(-staleAfter)
         let before = sessions.count
@@ -382,6 +470,16 @@ final class Store {
         pending.contains { $0.sessionId == sessionId }
     }
 
+    /// A row may only claim it needs you while a card backs it up. Once the last one goes, the
+    /// prompt has been settled somewhere, so the session is between turns.
+    private func settle(_ sessionId: String) {
+        guard !hasPending(sessionId),
+              let index = sessions.firstIndex(where: { $0.id == sessionId }),
+              sessions[index].state == .waiting
+        else { return }
+        sessions[index].state = .done
+    }
+
     // MARK: - Session tracking
 
     func record(_ event: HookEvent) {
@@ -408,15 +506,22 @@ final class Store {
             for stale in pending where stale.sessionId == sessionId { expire(stale.id) }
             touch(sessionId: sessionId, cwd: project, state: .done, agentType: event.agentType)
         case "Notification":
-            let waitingTypes: Set<String> = ["permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog"]
-            let state: SessionState = waitingTypes.contains(event.notificationType ?? "")
-                ? .waiting
-                : (event.notificationType == "agent_completed" ? .done : .idle)
-            touch(sessionId: sessionId, cwd: project, state: state, agentType: event.agentType)
+            touch(sessionId: sessionId, cwd: project, state: Self.state(for: event.notificationType), agentType: event.agentType)
         default:
             touch(sessionId: sessionId, cwd: project, state: nil, agentType: event.agentType)
         }
         onChange?()
+    }
+
+    /// Only a prompt on screen means Claude is blocked. idle_prompt is a timer saying Claude has
+    /// nothing to do, and the rest say nothing about state, so they leave the row as it is.
+    private static func state(for notificationType: String?) -> SessionState? {
+        switch notificationType {
+        case "permission_prompt", "agent_needs_input", "elicitation_dialog": return .waiting
+        case "idle_prompt", "agent_completed": return .done
+        case "elicitation_complete", "elicitation_response": return .working
+        default: return nil
+        }
     }
 
     /// The tool ran, or was refused, in the terminal. Either way our card is stale.
