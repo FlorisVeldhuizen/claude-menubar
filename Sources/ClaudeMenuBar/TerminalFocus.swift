@@ -202,15 +202,15 @@ enum TerminalFocus {
     /// instead of offering options that may not exist in that prompt.
     static func readMenu(pane: String?, cwd: String, client: SessionClient, completion: @escaping (TerminalMenu) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let text: String
+            let screen: Screen
             switch resolve(pane: pane, cwd: cwd, client: client) {
-            case .iTerm(let guid): text = readITerm(guid: guid)
-            case .terminal(let tty): text = readTerminal(tty: tty)
+            case .iTerm(let guid): screen = readITerm(guid: guid)
+            case .terminal(let tty): screen = readTerminal(tty: tty)
             case nil:
                 DispatchQueue.main.async { completion(TerminalMenu(options: [], rows: [], cursor: nil)) }
                 return
             }
-            let menu = parseMenu(text)
+            let menu = parseMenu(screen.visible)
             Log.write("MENU", menu.options.isEmpty
                 ? "no numbered menu on screen"
                 : "read \(menu.options.count) cursor=\(menu.cursor.map(String.init) ?? "-"): "
@@ -225,26 +225,59 @@ enum TerminalFocus {
         }
     }
 
-    private static func readITerm(guid: String) -> String {
+    /// Both terminals hand over the whole scrollback, so the height comes with it and the read is
+    /// cut down to the rows on screen. Menus Claude drew earlier sit in that history, and one of
+    /// those must never be mirrored in place of the prompt that is actually waiting.
+    private struct Screen {
+        let text: String
+        let rows: Int?
+
+        /// A row count arrives on the first line, so anything before the first newline is that.
+        init(payload: String) {
+            guard let end = payload.firstIndex(of: "\n"),
+                  let count = Int(payload[..<end].trimmingCharacters(in: .whitespaces))
+            else {
+                text = payload
+                rows = nil
+                return
+            }
+            text = String(payload[payload.index(after: end)...])
+            rows = count > 0 ? count : nil
+        }
+
+        var visible: String {
+            guard let rows else { return text }
+            return text.components(separatedBy: .newlines).suffix(rows).joined(separator: "\n")
+        }
+    }
+
+    private static func readITerm(guid: String) -> Screen {
         let script = """
         tell application "iTerm2"
           repeat with w in windows
             repeat with t in tabs of w
               repeat with s in sessions of t
-                if id of s contains "\(guid)" then return (text of s)
+                if id of s contains "\(guid)" then return ((rows of s) as text) & linefeed & (text of s)
               end repeat
             end repeat
           end repeat
         end tell
         return ""
         """
-        return shell("/usr/bin/osascript", ["-e", script]) ?? ""
+        return Screen(payload: shell("/usr/bin/osascript", ["-e", script]) ?? "")
     }
 
     /// Terminal needs indexed loops: `repeat with t in tabs of w` cannot coerce `contents` to text.
-    private static func readTerminal(tty: String) -> String {
-        let text = tellTerminal(tty: tty, body: "return (contents of tab ti of window wi) as text") ?? ""
-        return text == "none" ? "" : text
+    private static func readTerminal(tty: String) -> Screen {
+        let body = """
+        set r to 0
+                try
+                  set r to (number of rows of tab ti of window wi)
+                end try
+                return (r as text) & linefeed & ((contents of tab ti of window wi) as text)
+        """
+        let text = tellTerminal(tty: tty, body: body) ?? ""
+        return Screen(payload: text == "none" ? "" : text)
     }
 
     static func parseMenu(_ text: String) -> TerminalMenu {
@@ -261,12 +294,17 @@ enum TerminalFocus {
                 ))
                 continue
             }
-            if let dot = trimmed.firstIndex(of: "."),
-               let number = Int(trimmed[trimmed.startIndex..<dot]), number > 0, number < 20 {
+            let indent = line.prefix { $0 == " " }.count
+            // A line that sits under an open label belongs to it, even where the wrap happens to
+            // break onto a digit and a dot: "1.5s" is the rest of an option, not the next one.
+            let carriesOn = runs[runs.count - 1].last.map { $0.number != nil && indent >= $0.labelColumn } ?? false
+            if !carriesOn, let dot = trimmed.firstIndex(of: "."),
+               let number = Int(trimmed[trimmed.startIndex..<dot]), number > 0, number < 20,
+               number == 1 || number == next(in: runs[runs.count - 1]) {
                 let rest = trimmed[trimmed.index(after: dot)...].drop { $0 == " " }
                 guard !rest.isEmpty else { continue }
-                // A number we already have starts a fresh menu rather than extending this one.
-                if runs[runs.count - 1].contains(where: { $0.number == number }) { runs.append([]) }
+                // A menu is numbered straight through, so a 1 is always the start of a fresh one.
+                if number == 1, !runs[runs.count - 1].isEmpty { runs.append([]) }
                 let marker = line.prefix { " \t❯>›".contains($0) }.count
                 let column = marker + (trimmed.count - rest.count)
                 runs[runs.count - 1].append(Row(
@@ -277,7 +315,6 @@ enum TerminalFocus {
             // A wrapped label continues below its own start column, and takes the closing bracket of
             // a split tick box with it. A description sits further left, so it is left alone.
             guard var last = runs[runs.count - 1].last, last.number != nil else { continue }
-            let indent = line.prefix { $0 == " " }.count
             let closing = trimmed.hasPrefix("]")
             guard !trimmed.isEmpty, closing || indent >= last.labelColumn else { continue }
             let carried = closing
@@ -288,24 +325,20 @@ enum TerminalFocus {
             runs[runs.count - 1][runs[runs.count - 1].count - 1] = last
         }
 
-        guard let menu = runs.last(where: { run in run.contains { $0.number == 1 } }) else {
+        guard let rows = runs.last(where: { run in run.contains { $0.number != nil } }) else {
             return TerminalMenu(options: [], rows: [], cursor: nil)
-        }
-        // Only a menu numbered straight through from 1 is trusted; a gap means we read something else.
-        var rows: [Row] = []
-        var expected = 1
-        for row in menu {
-            if let number = row.number {
-                guard number == expected else { continue }
-                expected += 1
-            }
-            rows.append(row)
         }
         return TerminalMenu(
             options: rows.compactMap { $0.number == nil ? nil : $0.option },
             rows: rows,
             cursor: rows.firstIndex { $0.onCursor }
         )
+    }
+
+    /// The number a menu row must carry to continue this one. Anything else is prose, or a wrapped
+    /// label that happens to break onto a digit, and it leaves the menu it interrupts intact.
+    private static func next(in run: [Row]) -> Int {
+        (run.last { $0.number != nil }?.number ?? 0) + 1
     }
 
     /// Splits a tick box off an option's text. A wrapped option splits the box itself: the bracket
