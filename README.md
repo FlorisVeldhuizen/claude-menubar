@@ -34,8 +34,17 @@ command or question itself. The buttons mirror the numbered menu Claude is actua
 never see an option that doesn't exist. Others queue behind it as `2 of 3`; click any session marked
 *needs you* to bring its request up.
 
-Below that, every live session: **needs you**, **working**, **idle**, or **running** for a process
-that hasn't reported in yet.
+Below that, every live session:
+
+| State | Meaning |
+| :-- | :-- |
+| **needs you** | orange — waiting on a decision |
+| **working** | blue — running now |
+| **finished** | green — just completed a turn; reverts to idle after 10 minutes |
+| **idle** | grey — quiet |
+| **running** | faint — a live process that hasn't reported in yet |
+
+The header counts how many have finished, so you can see an agent is done without reading the list.
 
 | Button | Effect |
 | :-- | :-- |

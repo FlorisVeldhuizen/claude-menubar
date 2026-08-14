@@ -72,12 +72,13 @@ struct DecisionResult {
 }
 
 enum SessionState: String {
-    case working, waiting, idle, running
+    case working, waiting, done, idle, running
 
     var label: String {
         switch self {
         case .working: return "working"
         case .waiting: return "needs you"
+        case .done: return "finished"
         case .idle: return "idle"
         case .running: return "running"
         }

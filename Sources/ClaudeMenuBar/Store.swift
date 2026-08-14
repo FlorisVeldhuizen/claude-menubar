@@ -293,6 +293,10 @@ final class Store {
 
     /// Claude Code only fires SessionEnd on a clean exit, so quiet sessions are dropped on a timer.
     func sweep(staleAfter: TimeInterval) {
+        let settled = Date().addingTimeInterval(-10 * 60)
+        for index in sessions.indices where sessions[index].state == .done && sessions[index].lastActivity < settled {
+            sessions[index].state = .idle
+        }
         let cutoff = Date().addingTimeInterval(-staleAfter)
         let before = sessions.count
         sessions.removeAll { session in
@@ -336,6 +340,10 @@ final class Store {
             session.state == .idle && !hasPending(session.id)
         }
         onChange?()
+    }
+
+    var finishedCount: Int {
+        allSessions.filter { $0.state == .done }.count
     }
 
     var idleCount: Int {
@@ -404,10 +412,12 @@ final class Store {
         case "Stop":
             // Claude only finishes a turn once nothing is blocking it, so any card here is stale.
             for stale in pending where stale.sessionId == sessionId { expire(stale.id) }
-            touch(sessionId: sessionId, cwd: project, state: .idle, agentType: event.agentType)
+            touch(sessionId: sessionId, cwd: project, state: .done, agentType: event.agentType)
         case "Notification":
             let waitingTypes: Set<String> = ["permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog"]
-            let state: SessionState = waitingTypes.contains(event.notificationType ?? "") ? .waiting : .idle
+            let state: SessionState = waitingTypes.contains(event.notificationType ?? "")
+                ? .waiting
+                : (event.notificationType == "agent_completed" ? .done : .idle)
             touch(sessionId: sessionId, cwd: project, state: state, agentType: event.agentType)
         default:
             touch(sessionId: sessionId, cwd: project, state: nil, agentType: event.agentType)
