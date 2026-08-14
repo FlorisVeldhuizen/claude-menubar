@@ -177,8 +177,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Which build this is. The app never updates itself, so this is the only way to tell.
+    private static var buildLine: String {
+        let info = Bundle.main.infoDictionary
+        guard let version = info?["CFBundleShortVersionString"] as? String else { return "Claude MenuBar" }
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let commit = info?["GitCommit"] as? String ?? "?"
+        return "Claude MenuBar \(version) · build \(build) · \(commit)"
+    }
+
     private func showMenu() {
         let menu = NSMenu()
+        menu.addItem(withTitle: Self.buildLine, action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(.separator())
         let installed = HookInstaller.isInstalled(port: Self.port)
         menu.addItem(withTitle: installed ? "Hooks installed" : "Hooks not installed", action: nil, keyEquivalent: "")
             .isEnabled = false

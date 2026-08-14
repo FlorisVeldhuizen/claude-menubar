@@ -10,8 +10,8 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 
 - macOS 14+, Swift 6 to build
 - Claude Code, with hooks writable in `~/.claude/settings.json`
-- iTerm2 or Apple Terminal for the keystroke path. Sessions elsewhere — VS Code, another terminal —
-  are handled by gating instead, automatically. See below.
+- iTerm2 or Apple Terminal to answer by keystroke. Sessions anywhere else still work, by a slower
+  route described in [How it works](#how-it-works).
 
 ## Install
 
@@ -22,29 +22,16 @@ Native Swift, no dependencies, nothing leaves `127.0.0.1`.
 That builds it, copies it to `/Applications` and launches it. Without `--install` it stays in
 `build/`. To start it with your Mac, right-click the menu bar icon and tick **Open at login**.
 
-Open the panel and press **Install hooks**. That writes the hook entries into
+Then open the panel and press **Install hooks**. That writes the hook entries into
 `~/.claude/settings.json`, backing up the old file alongside it and leaving your existing hooks
-alone. Right-click the menu bar icon to remove them. Running sessions are picked up without
-restarting.
+alone. Running sessions are picked up without restarting. Right-click the menu bar icon to remove
+them again, or to see which build you are on.
 
 ## Using it
 
 **Waiting on you** shows one request at a time, with Claude's last message for context and the
 command or question itself. The buttons mirror the numbered menu Claude is actually showing, so you
-never see an option that doesn't exist. Others queue behind it as `2 of 3`; click any session marked
-*needs you* to bring its request up.
-
-Below that, every live session:
-
-| State | Meaning |
-| :-- | :-- |
-| **needs you** | orange — Claude is blocked on a decision; answer it here |
-| **working** | blue — running now |
-| **finished its turn** | green — done and waiting for you; goes quiet after 10 minutes |
-| **waiting for your prompt** | grey — quiet |
-| **not reporting yet** | faint — a live `claude` we found, but no hooks have arrived, so it can't be answered from here |
-
-Hover a row for the same thing in full, plus what a click does.
+never see an option that doesn't exist.
 
 | Button | Effect |
 | :-- | :-- |
@@ -55,23 +42,40 @@ Hover a row for the same thing in full, plus what a click does.
 A question that takes several answers draws a tick box on each option. Clicking one ticks it and
 leaves the card up, because that prompt only closes on Return — **Submit** sends it.
 
-Answering never pulls a session to the front — that's the point. Focus moves only via **Terminal**,
-the card's header, or clicking a session with no pending request.
+Answering never pulls a session to the front. Focus moves only via **Terminal**, the card's header,
+or clicking a session with no pending request.
 
-Every answer has a key. `⌘1` to `⌘9` pick the numbered options, `⌘↩` allows and `⌘D` denies on a
-card with no menu yet, and `⌘K` opens the message field. Command digits rather than plain ones, so
-typing into that field still works. With several decisions waiting, the header becomes one chip per
-project; click one or use `⌘[` / `⌘]` to switch.
+Every answer has a key: `⌘1`–`⌘9` pick the numbered options, `⌘↩` allows and `⌘D` denies on a card
+with no menu yet, and `⌘K` opens the message field. Command digits rather than plain ones, so typing
+into that field still works. With several decisions waiting, the header becomes one chip per project;
+click one or use `⌘[` / `⌘]` to switch.
 
-**Always allow `git add`** appears only where Claude offers no "don't ask again" of its own — that
-is, on gated cards that aren't questions, since Claude's own version is already in the mirrored menu.
+A new request plays a short sound. Right-click the menu bar icon → **Sound** to pick another; it
+plays as you select so you can hear it first, and **None** turns it off.
 
-It is scoped the way the prompt is, not by tool: a command gives its program and subcommand, a file
-tool gives the directory, a fetch gives the host. A chained command remembers every part, and a later
-call passes only if all of its parts are covered. A command that builds itself with `$( )` or
-backticks gets no rule offered at all. Rules are per project and kept in
-`~/Library/Application Support/ClaudeMenuBar/always-allow.json` rather than your Claude permission
-rules, and clear from the `⋯` menu.
+### Sessions
+
+Below the card, every live session, grouped so one that needs you is never buried under quiet ones.
+Hover a row for what its state means and what a click does.
+
+| State | Meaning |
+| :-- | :-- |
+| **needs you** | orange — blocked on a decision; answer it here |
+| **working** | blue — running now |
+| **finished its turn** | green — done and waiting for you; goes quiet after 10 minutes |
+| **waiting for your prompt** | grey — quiet |
+| **not reporting yet** | faint — a live `claude` we found, but no hooks have arrived from it yet |
+
+### Always allow
+
+**Always allow `git add`** is scoped the way the prompt is, not by tool: a command gives its program
+and subcommand, a file tool gives the directory, a fetch gives the host. A chained command remembers
+every part, and a later call passes only if all of its parts are covered. A command that builds
+itself with `$( )` or backticks gets no rule at all.
+
+Rules are per project, kept in `~/Library/Application Support/ClaudeMenuBar/always-allow.json`
+rather than in your Claude permission rules, and clear from the `⋯` menu. The button appears only
+where Claude offers no "don't ask again" of its own, since that one is already in the mirrored menu.
 
 ## How it works
 
@@ -88,44 +92,34 @@ Claude Code ─PermissionRequest─▶ app records it, replies "ask" at once
 you click ───────────────────────▶ app types that number into that pane
 ```
 
-The hook reports the tool, arguments and session; the answer travels by keystroke, because Claude
-Code's prompt is a numbered menu that selects on a digit.
-
-The keystroke waits for the prompt to actually be on screen, and goes only to a pane identified
-exactly — via `ITERM_SESSION_ID` or `TERM_SESSION_ID`, which command hooks inherit from `claude`.
-With no identified pane the app types nothing and tells you.
+The hook reports the tool, arguments and session. The answer travels by keystroke, because the prompt
+is a numbered menu that selects on a digit. Keystrokes wait for the prompt to actually be on screen
+and go only to a pane identified exactly, via the `ITERM_SESSION_ID` or `TERM_SESSION_ID` that
+command hooks inherit from `claude`. With no identified pane the app types nothing and tells you.
 
 The two terminals are addressed differently. iTerm2 exposes a session id on its panes, so the app
-matches that directly and writes with `write text`. Terminal tabs expose only a `tty`, so the app
-reads the session id from the `claude` process, takes its tty, and matches the tab on that. Writing
-there is `do script`, which always appends a return — harmless after a digit, which the prompt acts
-on at once, but it rules out sending a bare arrow key. So a tick list, which needs arrows to reach
-its Submit row, stays in the terminal on Apple Terminal.
+matches that and writes with `write text`. Terminal tabs expose only a `tty`, so the app reads the
+session id from the `claude` process, takes its tty, and matches the tab on that.
 
 **Failure is safe.** With the app not running the connection is refused, which Claude Code treats as
 a non-blocking error, and everything prompts in the terminal as before.
 
 ### Sessions with no terminal to type into
 
-A session in VS Code or another terminal has no pane to address, so it's handled the other way round.
-`PreToolUse` runs before the permission flow and, unlike `PermissionRequest`, does honour long
-timeouts — so for those sessions the app holds the decision there and answers through the hook. No
-keystrokes involved.
+A session in VS Code, or in a terminal the app can't address, has no pane to type into, so it is
+handled the other way round. `PreToolUse` runs before the permission flow and, unlike
+`PermissionRequest`, does honour long timeouts — so there the app holds the decision open and answers
+through the hook. No keystrokes involved.
 
-Which mode a session gets is decided per call, by whether it reported a pane, so nothing to
+Which route a session gets is decided per call, by whether it reported a pane, so there is nothing to
 configure. The cost is that `PreToolUse` fires for every tool call and can't tell how risky one is:
-read-only tools pass straight through, and everything else asks. If nothing answers within 280
-seconds the app returns no decision and the session prompts as it normally would.
+read-only tools pass straight through, everything else asks. If nothing answers within 280 seconds
+the app returns no decision and the session prompts as it normally would.
 
-For a gated question the app shows Claude's own options, read from the tool's arguments. Picking one
-denies the call with your choice as the reason, since the hook has no way to hand back an answer —
-Claude reads it and carries on, but it does see a denied tool call rather than an answered question.
-
-Jumping to a gated session opens VS Code at that folder via its URL handler, when the session
-reported itself as VS Code.
-
-A new request plays a short sound. Right-click the menu bar icon → **Sound** to pick another; it
-plays as you select so you can hear it first, and **None** turns it off.
+For one of these questions the app shows Claude's own options, read from the tool's arguments.
+Picking one denies the call with your choice as the reason, since the hook has no way to hand back an
+answer — Claude reads it and carries on, but it does see a denied tool call rather than an answered
+question. Jumping to such a session opens VS Code at that folder, when it reported itself as VS Code.
 
 ## Configuration
 
@@ -135,15 +129,18 @@ plays as you select so you can hear it first, and **None** turns it off.
 State lives in `~/Library/Application Support/ClaudeMenuBar/`, including a trace of every request,
 decision and keystroke in `trace.log`.
 
+The app icon is drawn by `scripts/make-icon.swift`, not stored as art. `scripts/make-icon.sh`
+regenerates `Resources/AppIcon.icns` from it.
+
 ## Limits
 
-- Jumping to a session works in iTerm2 and Apple Terminal only, as does the keystroke path. Porting
-  to another terminal means two calls in `TerminalFocus.swift`: address a pane, and write a string
-  to it.
-- Tick lists can't be answered from the menu bar on Apple Terminal, because `do script` cannot send
-  a bare arrow key. The card says so and you answer that one in the terminal.
-- Gated sessions see the options a tool declares, but not the ones Claude Code appends to its own
-  menu, since there is no rendered menu to read. "Chat about this" is offered explicitly; "Type
+- Typing an answer and jumping to a session work in iTerm2 and Apple Terminal only. Porting to
+  another terminal means two calls in `TerminalFocus.swift`: address a pane, and write to it.
+- Tick lists can't be answered from the menu bar on Apple Terminal, because `do script` always
+  appends a return and so cannot send a bare arrow key. The card says so; answer that one in the
+  terminal.
+- Sessions with no pane see the options a tool declares, but not the ones Claude Code appends to its
+  own menu, since there is no rendered menu to read. "Chat about this" is offered explicitly; "Type
   something" and notes are not.
 - Headless `claude -p` runs have no prompt to intercept.
 - Sessions on another machine can't reach your loopback.

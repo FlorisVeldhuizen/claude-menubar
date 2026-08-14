@@ -7,13 +7,21 @@ cd "$ROOT"
 APP_NAME="Claude MenuBar"
 BUNDLE_ID="dev.local.claude-menubar"
 APP="$ROOT/build/$APP_NAME.app"
+VERSION="1.0"
+# Which build you are running, since the app never updates itself: the commit count reads as a
+# version number, the hash says exactly what is in it.
+BUILD="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 swift build -c release
 BIN="$(swift build -c release --show-bin-path)/ClaudeMenuBar"
 
+[ -f "$ROOT/Resources/AppIcon.icns" ] || "$ROOT/scripts/make-icon.sh"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ClaudeMenuBar"
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,12 +34,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$BUILD</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
+    <key>GitCommit</key><string>$COMMIT</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>Claude MenuBar brings the terminal tab running a Claude Code session to the front.</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key><string>MIT licence · $(date +%Y)</string>
 </dict>
 </plist>
 PLIST
