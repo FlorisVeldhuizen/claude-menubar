@@ -56,7 +56,7 @@ struct RequestCard: View {
             }
         }
         if !request.gated {
-            return request.menu.enumerated().map { index, option in
+            return request.terminalOptions.enumerated().map { index, option in
                 Answer(id: index, label: option.label, key: .option(index + 1), ticked: option.ticked)
             }
         }

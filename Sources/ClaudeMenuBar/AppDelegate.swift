@@ -4,7 +4,7 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSPopoverDelegate {
     static let port: UInt16 = UInt16(ProcessInfo.processInfo.environment["CLAUDE_MENUBAR_PORT"] ?? "") ?? 7788
     static let staleAfter = TimeInterval(Int(ProcessInfo.processInfo.environment["CLAUDE_MENUBAR_STALE_MINUTES"] ?? "") ?? 30) * 60
 
@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
-            Task { @MainActor in self.store.verifyPending() }
+            Task { @MainActor in self.store.pollPending() }
         }
 
         SessionScan.run { [weak self] in self?.store.merge(scan: $0) }
@@ -97,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
+        popover.delegate = self
         let controller = NSHostingController(
             rootView: ConsoleView(
                 store: store,
@@ -150,6 +151,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return image
     }
 
+    /// A transient popover also closes on its own, so the flag can't be left set by the toggle alone.
+    func popoverDidClose(_ notification: Notification) {
+        store.panelOpen = false
+    }
+
     @objc private func statusItemClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
             showMenu()
@@ -162,9 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard let button = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(nil)
+            store.panelOpen = false
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            store.panelOpen = true
+            store.verifyPending()
         }
     }
 

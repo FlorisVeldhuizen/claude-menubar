@@ -60,7 +60,7 @@ enum TerminalFocus {
                 // sequences written together move the cursor one row, not two. Measured.
                 let arrow = steps < 0 ? "[A" : "[B"
                 let move = (0..<abs(steps)).map { _ in
-                    "tell s to write text ((character id 27) & \"\(arrow)\") newline NO\ndelay 0.15"
+                    "tell s to write text ((character id 27) & \"\(arrow)\") newline NO\ndelay 0.08"
                 }.joined(separator: "\n")
                 // A carriage return, not iTerm's `newline YES`: that sends a line feed, which the
                 // prompt ignores.
@@ -123,7 +123,14 @@ enum TerminalFocus {
             let menu = parseMenu(text)
             Log.write("MENU", menu.options.isEmpty
                 ? "no numbered menu on screen"
-                : "read \(menu.options.count) cursor=\(menu.cursor.map(String.init) ?? "-"): \(menu.options.joined(separator: " | "))")
+                : "read \(menu.options.count) cursor=\(menu.cursor.map(String.init) ?? "-"): "
+                  + menu.options.map { option in
+                      switch option.ticked {
+                      case true: return "[✔] \(option.label)"
+                      case false: return "[ ] \(option.label)"
+                      case nil: return option.label
+                      }
+                  }.joined(separator: " | "))
             DispatchQueue.main.async { completion(menu) }
         }
     }
@@ -136,26 +143,46 @@ enum TerminalFocus {
             // The Submit row carries no number, so it is recognised by its own text.
             if trimmed == "Submit" {
                 guard !runs[runs.count - 1].isEmpty else { continue }
-                runs[runs.count - 1].append(Row(number: nil, label: trimmed, onCursor: onCursor))
+                runs[runs.count - 1].append(Row(
+                    number: nil, option: MenuOption(label: trimmed, ticked: nil),
+                    onCursor: onCursor, labelColumn: 0
+                ))
                 continue
             }
-            guard let dot = trimmed.firstIndex(of: "."),
-                  let number = Int(trimmed[trimmed.startIndex..<dot]), number > 0, number < 20
-            else { continue }
-            let label = trimmed[trimmed.index(after: dot)...].trimmingCharacters(in: .whitespaces)
-            guard !label.isEmpty else { continue }
-            // A number we already have starts a fresh menu rather than extending this one.
-            if runs[runs.count - 1].contains(where: { $0.number == number }) { runs.append([]) }
-            runs[runs.count - 1].append(Row(number: number, label: label, onCursor: onCursor))
+            if let dot = trimmed.firstIndex(of: "."),
+               let number = Int(trimmed[trimmed.startIndex..<dot]), number > 0, number < 20 {
+                let rest = trimmed[trimmed.index(after: dot)...].drop { $0 == " " }
+                guard !rest.isEmpty else { continue }
+                // A number we already have starts a fresh menu rather than extending this one.
+                if runs[runs.count - 1].contains(where: { $0.number == number }) { runs.append([]) }
+                let marker = line.prefix { " \t❯>›".contains($0) }.count
+                let column = marker + (trimmed.count - rest.count)
+                runs[runs.count - 1].append(Row(
+                    number: number, option: box(String(rest)), onCursor: onCursor, labelColumn: column
+                ))
+                continue
+            }
+            // A wrapped label continues below its own start column, and takes the closing bracket of
+            // a split tick box with it. A description sits further left, so it is left alone.
+            guard var last = runs[runs.count - 1].last, last.number != nil else { continue }
+            let indent = line.prefix { $0 == " " }.count
+            let closing = trimmed.hasPrefix("]")
+            guard !trimmed.isEmpty, closing || indent >= last.labelColumn else { continue }
+            let carried = closing
+                ? trimmed.dropFirst().drop { $0 == " " }
+                : trimmed[trimmed.startIndex...]
+            last.option.label += " " + carried
+            if closing, last.option.ticked == nil { last.option.ticked = false }
+            runs[runs.count - 1][runs[runs.count - 1].count - 1] = last
         }
 
-        guard let last = runs.last(where: { run in run.contains { $0.number == 1 } }) else {
+        guard let menu = runs.last(where: { run in run.contains { $0.number == 1 } }) else {
             return TerminalMenu(options: [], rows: [], cursor: nil)
         }
         // Only a menu numbered straight through from 1 is trusted; a gap means we read something else.
         var rows: [Row] = []
         var expected = 1
-        for row in last {
+        for row in menu {
             if let number = row.number {
                 guard number == expected else { continue }
                 expected += 1
@@ -163,10 +190,24 @@ enum TerminalFocus {
             rows.append(row)
         }
         return TerminalMenu(
-            options: rows.compactMap { $0.number == nil ? nil : $0.label },
+            options: rows.compactMap { $0.number == nil ? nil : $0.option },
             rows: rows,
             cursor: rows.firstIndex { $0.onCursor }
         )
+    }
+
+    /// Splits a tick box off an option's text. A wrapped option splits the box itself: the bracket
+    /// closes on the line below, and the mark, if any, stays next to the opening one.
+    private static func box(_ text: String) -> MenuOption {
+        guard text.hasPrefix("[") else { return MenuOption(label: text, ticked: nil) }
+        let after = text.dropFirst()
+        if let close = after.firstIndex(of: "]") {
+            let mark = after[after.startIndex..<close].trimmingCharacters(in: .whitespaces)
+            let label = after[after.index(after: close)...].trimmingCharacters(in: .whitespaces)
+            return MenuOption(label: String(label), ticked: !mark.isEmpty)
+        }
+        let mark = after.prefix { $0 != " " }
+        return MenuOption(label: String(after.dropFirst(mark.count).drop { $0 == " " }), ticked: !mark.isEmpty)
     }
 
     private static func escaped(_ text: String) -> String {

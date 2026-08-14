@@ -72,6 +72,11 @@ final class Store {
     private var wentQuiet: Set<String> = []
     private var reading: Set<String> = []
     private var lastKeyAt: [String: Date] = [:]
+    private var lastMenu: [String: (menu: TerminalMenu, at: Date)] = [:]
+    private var pollTick = 0
+
+    /// Set by the app: with the panel shut, nobody is watching a card's boxes.
+    var panelOpen = false
 
     /// Read-only work is allowed straight through; gating every call would drown the panel.
     private static let alwaysSafe: Set<String> = [
@@ -135,40 +140,67 @@ final class Store {
     /// One read per card does both jobs: mirror the menu Claude is showing, and notice when it has
     /// gone — a prompt can be dismissed in ways that fire no hook at all, such as answering No.
     func verifyPending() {
+        for request in pending where !request.gated { read(request) }
+    }
+
+    /// Reading a pane costs about 0.4s of AppleScript, and every one of those queues behind the others,
+    /// which is what a keystroke then waits for. So the timer only keeps the card you are looking at
+    /// fresh; the rest, and everything while the panel is shut, go at a third of the rate.
+    func pollPending() {
+        pollTick += 1
+        let watched = panelOpen ? activeRequest?.id : nil
         for request in pending where !request.gated {
-            let id = request.id
-            // One read at a time per card, and none that started before the last keystroke: two reads
-            // in flight land in either order, and the older one puts the ticks back as they were.
-            guard !reading.contains(id) else { continue }
-            reading.insert(id)
-            let startedAt = Date()
-            TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.reading.remove(id)
-                    let options = menu.options
-                    if let typed = self.lastKeyAt[id], typed > startedAt { return }
-                    guard let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
-                    if options.isEmpty {
-                        guard !self.pending[index].terminalOptions.isEmpty else { return }
-                        // A tool that asks several questions redraws between them, so one empty read
-                        // is not proof the prompt has gone.
-                        if self.pending[index].isTickList, self.wentQuiet.insert(id).inserted { return }
-                        Log.write("CARD", "prompt gone from screen")
-                        self.expire(id)
-                    } else if self.pending[index].terminalOptions != options {
-                        self.wentQuiet.remove(id)
-                        self.pending[index].terminalOptions = options
-                        self.onChange?()
-                    }
+            guard request.id == watched || pollTick % 3 == 0 else { continue }
+            read(request)
+        }
+    }
+
+    private func read(_ request: PendingRequest) {
+        let id = request.id
+        // One read at a time per card, and none that started before the last keystroke: two reads
+        // in flight land in either order, and the older one puts the ticks back as they were.
+        guard !reading.contains(id) else { return }
+        reading.insert(id)
+        let startedAt = Date()
+        TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
+            Task { @MainActor in
+                guard let self else { return }
+                self.reading.remove(id)
+                let options = menu.options
+                if let typed = self.lastKeyAt[id], typed > startedAt { return }
+                self.lastMenu[id] = (menu, Date())
+                guard let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
+                if options.isEmpty {
+                    guard !self.pending[index].terminalOptions.isEmpty else { return }
+                    // A tool that asks several questions redraws between them, so one empty read
+                    // is not proof the prompt has gone.
+                    if self.pending[index].isTickList, self.wentQuiet.insert(id).inserted { return }
+                    Log.write("CARD", "prompt gone from screen")
+                    self.expire(id)
+                } else if self.pending[index].terminalOptions != options {
+                    self.wentQuiet.remove(id)
+                    self.pending[index].terminalOptions = options
+                    self.onChange?()
                 }
             }
         }
     }
 
+    /// Only ever called once Claude Code says its prompt is drawn, so the key lands on a menu.
     private func flushKey(_ session: String) {
         guard let queued = queuedKeys.removeValue(forKey: session) else { return }
         deliver(queued.key, session: session, cwd: queued.cwd)
+    }
+
+    /// The prompt never appeared. Typing now would put a digit in the composer, so the key is thrown
+    /// away and the card comes back instead.
+    private func dropQueuedKey(_ request: PendingRequest) {
+        guard queuedKeys.removeValue(forKey: request.sessionId) != nil else { return }
+        Log.write("KEY", "dropped: no prompt appeared for \(request.folder)")
+        if !pending.contains(where: { $0.id == request.id }) { pending.append(request) }
+        focusedRequestId = request.id
+        notice = "\(request.folder) never drew its prompt — nothing was typed."
+        onChange?()
     }
 
     init() {
@@ -273,7 +305,7 @@ final class Store {
             queuedKeys[request.sessionId] = (key, request.cwd)
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(8))
-                self?.flushKey(request.sessionId)
+                self?.dropQueuedKey(request)
             }
         }
     }
@@ -292,6 +324,12 @@ final class Store {
     /// can ask several questions in turn, and the next one is drawn in the same place.
     func submit(_ request: PendingRequest) {
         notice = nil
+        // Ticking does not move the cursor, so a read from a moment ago still says where it is.
+        if let last = lastMenu[request.id], Date().timeIntervalSince(last.at) < 2,
+           let submitRow = last.menu.submitRow, let cursor = last.menu.cursor {
+            keepingCard(request, key: .confirm(steps: submitRow - cursor), what: "submit")
+            return
+        }
         TerminalFocus.readMenu(pane: panes[request.sessionId], cwd: request.cwd) { [weak self] menu in
             Task { @MainActor in
                 guard let self else { return }
@@ -320,7 +358,7 @@ final class Store {
                     return
                 }
                 self.lastKeyAt[request.id] = Date()
-                try? await Task.sleep(for: .milliseconds(400))
+                try? await Task.sleep(for: .milliseconds(150))
                 self.verifyPending()
             }
         }

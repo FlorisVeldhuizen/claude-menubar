@@ -143,12 +143,14 @@ struct SessionInfo: Identifiable {
 /// One row of the menu Claude Code has on screen. A row with no number is the Submit row.
 struct Row {
     let number: Int?
-    let label: String
+    var option: MenuOption
     let onCursor: Bool
+    /// Where the label starts, so a deeper-indented line below is known to belong to it.
+    let labelColumn: Int
 }
 
 struct TerminalMenu {
-    let options: [String]
+    let options: [MenuOption]
     let rows: [Row]
     let cursor: Int?
 
@@ -162,10 +164,10 @@ struct SessionGroup: Identifiable {
     var id: String { title }
 }
 
-struct MenuOption {
-    let label: String
+struct MenuOption: Equatable {
+    var label: String
     /// nil where the option is a plain action rather than one of the boxes.
-    let ticked: Bool?
+    var ticked: Bool?
 }
 
 struct AskOption: Identifiable {
@@ -191,7 +193,7 @@ struct PendingRequest: Identifiable {
     let permissionLevel: String?
     let receivedAt: Date
     /// The numbered menu actually on screen, read from the pane once Claude draws it.
-    var terminalOptions: [String] = []
+    var terminalOptions: [MenuOption] = []
     /// True when the session cannot be reached by keystroke, so the answer goes back through the hook.
     var gated = false
 
@@ -201,28 +203,14 @@ struct PendingRequest: Identifiable {
 
     /// Claude Code draws a tick box on every option of a multiple-choice question, and nothing on a
     /// plain menu. So the box is how we know a digit ticks rather than answers.
-    var menu: [MenuOption] {
-        terminalOptions.map { raw in
-            guard raw.hasPrefix("["), let close = raw.firstIndex(of: "]") else {
-                return MenuOption(label: raw, ticked: nil)
-            }
-            let mark = raw[raw.index(after: raw.startIndex)..<close].trimmingCharacters(in: .whitespaces)
-            let label = raw[raw.index(after: close)...].trimmingCharacters(in: .whitespaces)
-            return MenuOption(label: String(label), ticked: !mark.isEmpty)
-        }
-    }
-
-    var isTickList: Bool { menu.contains { $0.ticked != nil } }
+    var isTickList: Bool { terminalOptions.contains { $0.ticked != nil } }
 
     /// Ticking goes through the terminal and back, which takes about a second. The box flips here
     /// first so the click feels immediate, and the next read replaces it with the real one.
     mutating func flipTick(option: Int) {
         let index = option - 1
-        guard terminalOptions.indices.contains(index) else { return }
-        let raw = terminalOptions[index]
-        guard raw.hasPrefix("["), let close = raw.firstIndex(of: "]") else { return }
-        let mark = raw[raw.index(after: raw.startIndex)..<close].trimmingCharacters(in: .whitespaces)
-        terminalOptions[index] = (mark.isEmpty ? "[✔]" : "[ ]") + raw[raw.index(after: close)...]
+        guard terminalOptions.indices.contains(index), let was = terminalOptions[index].ticked else { return }
+        terminalOptions[index].ticked = !was
     }
 
     /// The one field that matters per tool, so the card shows the decision-relevant text.
