@@ -179,7 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } else {
             // The item reads as pressed for as long as its panel is up, the way every other one does.
             button.highlight(true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // The arrow points at the middle of what it was aimed at, which is the crab, not the
+            // width the badge is held in reserve on.
+            let anchor = button.bounds.offsetBy(dx: CrabIcon.anchorOffset, dy: 0)
+            popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             store.panelOpen = true
             store.verifyPending()

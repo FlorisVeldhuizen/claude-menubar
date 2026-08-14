@@ -100,9 +100,9 @@ struct ConsoleView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkle")
+            Image(nsImage: CrabIcon.mark())
+                .renderingMode(.template)
                 .foregroundStyle(store.pending.isEmpty ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.orange))
-                .symbolEffect(.bounce, value: store.pending.count)
             Text("Claude sessions")
                 .font(.headline)
             Spacer()

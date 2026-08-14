@@ -16,57 +16,52 @@ struct Crab {
     let eyes: [Block]
 }
 
-let detailed = Crab(
-    columns: 22,
-    rows: 15,
+/// Claude Code's own crab, read off the art it prints in the terminal.
+let crab = Crab(
+    columns: 12,
+    rows: 8,
     body: [
-        Block(x: 3, y: 0, width: 16, height: 11),
-        Block(x: 0, y: 3, width: 3, height: 4),
-        Block(x: 19, y: 3, width: 3, height: 4),
-        Block(x: 4, y: 11, width: 2, height: 4),
-        Block(x: 8, y: 11, width: 2, height: 4),
-        Block(x: 12, y: 11, width: 2, height: 4),
-        Block(x: 16, y: 11, width: 2, height: 4),
+        Block(x: 2, y: 0, width: 8, height: 6),
+        Block(x: 0, y: 2, width: 2, height: 2),
+        Block(x: 10, y: 2, width: 2, height: 2),
+        Block(x: 2, y: 6, width: 1, height: 2),
+        Block(x: 4, y: 6, width: 1, height: 2),
+        Block(x: 7, y: 6, width: 1, height: 2),
+        Block(x: 9, y: 6, width: 1, height: 2),
     ],
     eyes: [
-        Block(x: 5, y: 2, width: 2, height: 2),
-        Block(x: 15, y: 2, width: 2, height: 2),
+        Block(x: 3, y: 1, width: 1, height: 1),
+        Block(x: 8, y: 1, width: 1, height: 1),
     ]
 )
 
-/// The same crab at half the grid, for the sizes where a 22 wide grid falls between whole pixels.
-let simple = Crab(
-    columns: 14,
-    rows: 10,
-    body: [
-        Block(x: 2, y: 0, width: 10, height: 7),
-        Block(x: 0, y: 2, width: 2, height: 3),
-        Block(x: 12, y: 2, width: 2, height: 3),
-        Block(x: 3, y: 7, width: 1, height: 3),
-        Block(x: 5, y: 7, width: 1, height: 3),
-        Block(x: 8, y: 7, width: 1, height: 3),
-        Block(x: 10, y: 7, width: 1, height: 3),
-    ],
-    eyes: [
-        Block(x: 4, y: 1, width: 1, height: 1),
-        Block(x: 9, y: 1, width: 1, height: 1),
-    ]
-)
+func doubled(_ crab: Crab) -> Crab {
+    func scale(_ blocks: [Block]) -> [Block] {
+        blocks.map { Block(x: $0.x * 2, y: $0.y * 2, width: $0.width * 2, height: $0.height * 2) }
+    }
+    return Crab(
+        columns: crab.columns * 2, rows: crab.rows * 2,
+        body: scale(crab.body), eyes: scale(crab.eyes)
+    )
+}
 
-let shellColour = NSColor(srgbRed: 0.80, green: 0.47, blue: 0.36, alpha: 1)
-let friendColour = NSColor(srgbRed: 0.64, green: 0.37, blue: 0.28, alpha: 1)
-let eyeColour = NSColor(srgbRed: 0.07, green: 0.07, blue: 0.09, alpha: 1)
-let barColour = NSColor(srgbRed: 0.34, green: 0.34, blue: 0.38, alpha: 1)
+// #DA7758, the body colour Clawd is drawn in.
+let shellColour = NSColor(srgbRed: 0.855, green: 0.467, blue: 0.345, alpha: 1)
+let friendColour = NSColor(srgbRed: 0.684, green: 0.374, blue: 0.276, alpha: 1)
+// The blue of the terminal Clawd is printed in, rather than a plain dark tile.
+let eyeColour = NSColor(srgbRed: 0.11, green: 0.12, blue: 0.17, alpha: 1)
+let barColour = NSColor(srgbRed: 0.38, green: 0.40, blue: 0.48, alpha: 1)
 let plateColours = [
-    NSColor(srgbRed: 0.16, green: 0.16, blue: 0.19, alpha: 1),
-    NSColor(srgbRed: 0.07, green: 0.07, blue: 0.09, alpha: 1),
+    NSColor(srgbRed: 0.20, green: 0.22, blue: 0.29, alpha: 1),
+    NSColor(srgbRed: 0.11, green: 0.12, blue: 0.17, alpha: 1),
 ]
 
 /// A 40 unit tile: the menu bar along the top edge, the crab below it, two more half out of frame.
 let screen: CGFloat = 40
+let front = doubled(crab)
 let bar = Block(x: 0, y: 0, width: screen, height: 4)
-let crabAt = CGPoint(x: 9, y: 14)
-let friendsAt = [CGPoint(x: -7, y: 19), CGPoint(x: 33, y: 19)]
+let crabAt = CGPoint(x: 8, y: 14)
+let friendsAt = [CGPoint(x: -6, y: 22), CGPoint(x: 34, y: 22)]
 
 func draw(size: CGFloat) -> NSImage {
     NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
@@ -74,7 +69,7 @@ func draw(size: CGFloat) -> NSImage {
         let small = size < 64
         // The two behind need a whole crab each to read as one, which needs 128 pixels.
         let crowded = size >= 128
-        let columns: CGFloat = small ? simple.columns : screen
+        let columns: CGFloat = small ? crab.columns : screen
         let inset = small ? size * 0.03 : size * 0.095
         let tile = NSRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
         let plate = NSBezierPath(roundedRect: tile, xRadius: tile.width * 0.225, yRadius: tile.width * 0.225)
@@ -99,7 +94,7 @@ func draw(size: CGFloat) -> NSImage {
         }
 
         guard !small else {
-            paint(simple, at: CGPoint(x: 0, y: (columns - simple.rows) / 2), colour: shellColour)
+            paint(crab, at: CGPoint(x: 0, y: (columns - crab.rows) / 2), colour: shellColour)
             return true
         }
 
@@ -107,8 +102,8 @@ func draw(size: CGFloat) -> NSImage {
         barColour.setFill()
         NSBezierPath(rect: rect(bar)).fill()
 
-        if crowded { friendsAt.forEach { paint(simple, at: $0, colour: friendColour) } }
-        paint(detailed, at: crabAt, colour: shellColour)
+        if crowded { friendsAt.forEach { paint(crab, at: $0, colour: friendColour) } }
+        paint(front, at: crabAt, colour: shellColour)
         return true
     }
 }
