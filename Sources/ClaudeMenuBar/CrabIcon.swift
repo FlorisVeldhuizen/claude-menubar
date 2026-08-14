@@ -30,8 +30,9 @@ enum CrabIcon {
     /// Half the legs, which are too thin to weigh anything: centred on its box the crab looks high.
     private static let sink: CGFloat = 1.5
 
-    /// Wide enough for the crab and the badge beside it, since the item never changes width.
-    static let width: CGFloat = 28
+    /// The crab and a point either side. A badge lane of its own would leave a hole in the menu bar
+    /// on every session where nothing is waiting, so the dot sits over the crab instead.
+    static let width: CGFloat = 21
     private static let height: CGFloat = 18
     private static let left: CGFloat = 1
 
@@ -45,14 +46,17 @@ enum CrabIcon {
 
     /// The count is punched out of the icon so the item stays one snug fixed width.
     static func statusImage(count: Int, badge: CGFloat = 1) -> NSImage {
-        template(width: width, height: height) {
-            paint(from: CGPoint(x: left, y: (height + rows * unit) / 2 - sink))
+        let corner = CGPoint(x: left, y: (height + rows * unit) / 2 - sink)
+        return template(width: width, height: height) {
+            paint(from: corner)
             guard count > 0 else { return }
 
             // A digit this small is unreadable over the crab, so the badge is just a dot.
             // The count itself lives in the tooltip and the panel.
-            let radius = 2.5 * max(badge, 0.01)
-            let centre = NSPoint(x: width - 3.5, y: height - 3)
+            let radius = 2.25 * max(badge, 0.01)
+            // Off the crab's top right corner, where its own box is empty, so the ring that keeps the
+            // dot legible cuts the head rather than an eye.
+            let centre = NSPoint(x: corner.x + 11.5 * unit, y: corner.y + 0.75 * unit)
             let dot = NSRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
 
             NSGraphicsContext.current?.compositingOperation = .destinationOut
