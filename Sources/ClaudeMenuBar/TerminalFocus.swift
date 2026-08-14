@@ -70,15 +70,14 @@ enum TerminalFocus {
         ttyLock.unlock()
         if let cached { return cached }
 
-        // `ps -ax`, not pgrep: pgrep does not list the claude process that owns the calling shell.
         let script = """
-        ps -ax -o pid=,comm= | awk '$2 ~ /(^|\\/)claude$/ { print $1 }' | while read -r p; do
+        \(Shell.claudePIDs) | while read -r p; do
           if ps eww -p "$p" 2>/dev/null | tr ' ' '\\n' | grep -qx "TERM_SESSION_ID=\(sessionId)"; then
             ps -o tty= -p "$p" | tr -d ' '
           fi
         done
         """
-        guard let raw = shell("/bin/sh", ["-c", script]) else { return nil }
+        guard let raw = Shell.sh(script) else { return nil }
         let matches = raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         guard let tty = matches.first, matches.count == 1 else {
             Log.write("PANE", matches.isEmpty ? "no tty for \(sessionId)" : "ambiguous: \(matches.count) ttys")
@@ -112,7 +111,7 @@ enum TerminalFocus {
         end tell
         return "none"
         """
-        return shell("/usr/bin/osascript", ["-e", script])
+        return Shell.osascript(script)
     }
 
     /// Types a key into the pane running this session. Used to pick a numbered option.
@@ -195,7 +194,7 @@ enum TerminalFocus {
         end tell
         return "none"
         """
-        return shell("/usr/bin/osascript", ["-e", script]) == "ok"
+        return Shell.osascript(script) == "ok"
     }
 
     /// Reads the numbered menu Claude Code is actually showing, so the panel mirrors it
@@ -264,7 +263,7 @@ enum TerminalFocus {
         end tell
         return ""
         """
-        return Screen(payload: shell("/usr/bin/osascript", ["-e", script]) ?? "")
+        return Screen(payload: Shell.osascript(script) ?? "")
     }
 
     /// Terminal needs indexed loops: `repeat with t in tabs of w` cannot coerce `contents` to text.
@@ -403,7 +402,7 @@ enum TerminalFocus {
         end repeat
         return out
         """
-        return titles(from: shell("/usr/bin/osascript", ["-e", script]), stripJob: true)
+        return titles(from: Shell.osascript(script), stripJob: true)
     }
 
     /// Terminal needs indexed loops here too, and its `name` will not coerce to text at all, so the
@@ -423,7 +422,7 @@ enum TerminalFocus {
           return out
         end tell
         """
-        return titles(from: shell("/usr/bin/osascript", ["-e", script]), stripJob: false)
+        return titles(from: Shell.osascript(script), stripJob: false)
     }
 
     private static func titles(from output: String?, stripJob: Bool) -> [String: String]? {
@@ -478,19 +477,18 @@ enum TerminalFocus {
             .replacingOccurrences(of: "\n", with: " ")
     }
 
-
     private static func sessionGUID(forCwd cwd: String) -> String? {
         // Every match is listed, not just the first: two sessions in one directory are ambiguous,
         // and typing into the wrong one is worse than not typing at all.
         let script = """
-        for p in $(pgrep -x claude); do
+        \(Shell.claudePIDs) | while read -r p; do
           c=$(lsof -a -d cwd -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
           if [ "$c" = "\(cwd)" ]; then
             ps eww -p "$p" 2>/dev/null | tr ' ' '\\n' | sed -n 's/^ITERM_SESSION_ID=//p' | head -1
           fi
         done
         """
-        guard let raw = shell("/bin/sh", ["-c", script]) else { return nil }
+        guard let raw = Shell.sh(script) else { return nil }
         let matches = raw.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         guard matches.count == 1 else {
             Log.write("PANE", matches.isEmpty ? "no pane for \(cwd)" : "ambiguous: \(matches.count) sessions in \(cwd)")
@@ -519,7 +517,7 @@ enum TerminalFocus {
         end tell
         return "none"
         """
-        return shell("/usr/bin/osascript", ["-e", script]) == "ok"
+        return Shell.osascript(script) == "ok"
     }
 
     @discardableResult
@@ -548,22 +546,5 @@ enum TerminalFocus {
                 return
             }
         }
-    }
-
-    private static func shell(_ launchPath: String, _ arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launchPath)
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

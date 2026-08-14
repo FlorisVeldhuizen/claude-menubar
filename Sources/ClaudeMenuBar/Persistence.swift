@@ -21,12 +21,13 @@ enum Persistence {
 
     // MARK: - Plumbing
 
-    static var directory: URL {
+    /// Made once: every trace line asks for this, and each ask was a createDirectory syscall.
+    static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ClaudeMenuBar", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
-    }
+    }()
 
     private static var rulesURL: URL { directory.appendingPathComponent("always-allow.json") }
     private static var panesURL: URL { directory.appendingPathComponent("panes.json") }

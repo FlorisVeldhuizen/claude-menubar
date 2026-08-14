@@ -17,7 +17,5 @@ enum Sound {
         set { UserDefaults.standard.set(newValue, forKey: "lastAudibleSound") }
     }
 
-    static var muted: Bool { current == silent }
-
     static func play(_ name: String = current) { NSSound(named: name)?.play() }
 }

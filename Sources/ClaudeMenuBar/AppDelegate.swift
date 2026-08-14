@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         HookInstaller.refreshIfInstalled(port: Self.port)
         startServer()
+        refreshHookState()
         refreshStatusItem()
 
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
@@ -34,13 +35,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             Task { @MainActor in self.store.pollPending() }
         }
 
-        SessionScan.run { [weak self] in self?.store.merge(scan: $0) }
+        scanSessions()
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            SessionScan.run { [weak self] found in
-                Task { @MainActor in
-                    self?.store.merge(scan: found)
-                    self?.store.refreshTitles()
-                }
+            Task { @MainActor in self.pollSessions() }
+        }
+    }
+
+    private var scanTick = 0
+
+    /// Every ten seconds with the panel open, a sixth of that while it is shut. The scan spawns an
+    /// `lsof` per claude process, and only the session list reads what it finds.
+    private func pollSessions() {
+        scanTick += 1
+        guard store.panelOpen || scanTick % 6 == 0 else { return }
+        scanSessions()
+    }
+
+    private func scanSessions() {
+        SessionScan.run { [weak self] found in
+            Task { @MainActor in
+                self?.store.merge(scan: found)
+                self?.store.refreshTitles()
             }
         }
     }
@@ -123,8 +138,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popover.contentViewController = controller
     }
 
-    private func refreshStatusItem() {
+    /// Reads settings.json, so it runs on the few events that can change it rather than on every
+    /// store change: those arrive with each hook event, and a parse each would be on the main thread.
+    private func refreshHookState() {
         store.hooksInstalled = HookInstaller.isInstalled(port: Self.port)
+    }
+
+    private func refreshStatusItem() {
         let count = store.pending.count
         drawStatusIcon(count: count)
         statusItem.button?.toolTip = count > 0 ? "\(count) waiting on you" : "Claude sessions"
@@ -191,9 +211,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
             store.panelOpen = true
+            refreshHookState()
             store.verifyPending()
             store.refreshTitles()
             store.refreshLoginItem()
+            scanSessions()
         }
     }
 
@@ -241,7 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(withTitle: Self.buildLine, action: nil, keyEquivalent: "").isEnabled = false
         menu.addItem(withTitle: "About Permission Relay", action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        let installed = HookInstaller.isInstalled(port: Self.port)
+        refreshHookState()
+        let installed = store.hooksInstalled
         menu.addItem(withTitle: installed ? "Hooks installed" : "Hooks not installed", action: nil, keyEquivalent: "")
             .isEnabled = false
         menu.addItem(.separator())
@@ -292,11 +315,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func toggleHooks() {
         do {
-            if HookInstaller.isInstalled(port: Self.port) {
+            if store.hooksInstalled {
                 try HookInstaller.uninstall(port: Self.port)
             } else {
                 try HookInstaller.install(port: Self.port)
             }
+            refreshHookState()
             refreshStatusItem()
         } catch {
             let alert = NSAlert(error: error)

@@ -5,7 +5,6 @@ struct HookEvent: Decodable {
     let hookEventName: String?
     let cwd: String?
     let transcriptPath: String?
-    let permissionMode: String?
     let toolName: String?
     let toolInput: [String: JSONValue]?
     let toolUseId: String?

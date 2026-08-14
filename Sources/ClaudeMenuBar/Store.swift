@@ -69,6 +69,7 @@ final class Store {
     private var promptShowing: Set<String> = []
     private var answered: [String: PendingRequest] = [:]
     private var gateWaiters: [String: CheckedContinuation<DecisionResult, Never>] = [:]
+    private var gateTimeouts: [String: Task<Void, Never>] = [:]
     private var wentQuiet: Set<String> = []
     private var reading: Set<String> = []
     private var lastKeyAt: [String: Date] = [:]
@@ -122,7 +123,7 @@ final class Store {
         onChange?()
         onNewRequest?(request)
 
-        Task { [weak self] in
+        gateTimeouts[request.id] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(280))
             self?.releaseGate(request.id, decision: .ask)
         }
@@ -137,12 +138,11 @@ final class Store {
     }
 
     private func releaseGate(_ id: String, decision: Decision, message: String? = nil) {
+        gateTimeouts.removeValue(forKey: id)?.cancel()
         guard let continuation = gateWaiters.removeValue(forKey: id) else { return }
         Log.write("GATE", "released \(id) as \(decision.rawValue)")
         continuation.resume(returning: DecisionResult(decision: decision, message: message))
     }
-
-    func pane(for sessionId: String) -> String? { panes[sessionId] }
 
     /// One read per card does both jobs: mirror the menu Claude is showing, and notice when it has
     /// gone — a prompt can be dismissed in ways that fire no hook at all, such as answering No.
