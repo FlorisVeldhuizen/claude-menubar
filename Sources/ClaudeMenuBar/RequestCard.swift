@@ -7,11 +7,6 @@ struct RequestCard: View {
     @Binding var noteTarget: String?
     @Binding var noteText: String
 
-    /// Only the card watches this clock: it has to know when Claude's menu is not coming.
-    @State private var now = Date()
-
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
     private enum Layout {
         static let detailBox: CGFloat = 150
         static let answerRow: CGFloat = 26
@@ -26,7 +21,8 @@ struct RequestCard: View {
         /// Claude's own menu is usually three lines. Holding that much room from the start means the
         /// card doesn't reshuffle when the real options arrive a few seconds later.
         static let expectedOptions = 3
-        /// Past this the menu is not coming, so the card offers the plain guess instead of waiting.
+        /// How long the menu is given to appear. Past this, the first read that finds none ends the
+        /// wait, and the card offers the plain guess instead.
         static let menuGiveUp: TimeInterval = 9
     }
 
@@ -49,7 +45,6 @@ struct RequestCard: View {
             .padding(.horizontal, 12)
             .background { shortcuts }
             .animation(Motion.card, value: noteTarget)
-            .onReceive(tick) { now = $0 }
             // A card that lands while you are looking elsewhere gets one beat of extra colour.
             .onAppear {
                 landed = false
@@ -187,13 +182,17 @@ struct RequestCard: View {
         .animation(Motion.card, value: detailHeight)
     }
 
+    /// Waiting is over only when a read says so. Guessing from the clock alone put the plain row up
+    /// while the menu was still on its way, and the buttons then changed under the pointer.
+    private var gaveUp: Bool { request.menuMissed(after: Layout.menuGiveUp) }
+
     @ViewBuilder private var answerRows: some View {
         Group {
             if !answers.isEmpty {
                 optionButtons
             } else if request.gated {
                 pairRow(allow: "Allow", deny: "Deny", note: "answered here · no terminal to reach")
-            } else if now.timeIntervalSince(request.receivedAt) > Layout.menuGiveUp {
+            } else if gaveUp {
                 pairRow(allow: "Yes", deny: "No", note: "no menu on screen — this answers 1 or Esc")
             } else {
                 waitingRows
@@ -202,6 +201,7 @@ struct RequestCard: View {
         .frame(minHeight: CGFloat(reservedRows) * Layout.answerRow, alignment: .top)
         .animation(Motion.card, value: request.terminalOptions)
         .animation(Motion.card, value: request.gated)
+        .animation(Motion.card, value: gaveUp)
     }
 
     private var optionButtons: some View {

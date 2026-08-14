@@ -178,6 +178,9 @@ final class Store {
                 self.lastMenu[id] = (menu, Date())
                 if !options.isEmpty { self.announce(id, drawn: true) }
                 guard let index = self.pending.firstIndex(where: { $0.id == id }) else { return }
+                // Stamped when the read started, since that is when it looked at the pane. Stamping
+                // it on return counts a read that looked before the wait was up as if it looked after.
+                self.pending[index].lastRead = MenuRead(at: startedAt, sawMenu: !options.isEmpty)
                 if options.isEmpty {
                     guard !self.pending[index].terminalOptions.isEmpty else { return }
                     // A tool that asks several questions redraws between them, so one empty read

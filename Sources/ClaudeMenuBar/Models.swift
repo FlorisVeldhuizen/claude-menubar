@@ -186,6 +186,12 @@ struct AskQuestion: Identifiable {
     let options: [AskOption]
 }
 
+/// One look at the session's pane, and whether Claude's menu was on it.
+struct MenuRead: Equatable {
+    let at: Date
+    let sawMenu: Bool
+}
+
 struct PendingRequest: Identifiable {
     let id: String
     let sessionId: String
@@ -198,6 +204,8 @@ struct PendingRequest: Identifiable {
     let receivedAt: Date
     /// The numbered menu actually on screen, read from the pane once Claude draws it.
     var terminalOptions: [MenuOption] = []
+    /// The last pane read to come back for this card.
+    var lastRead: MenuRead?
     /// True when the session cannot be reached by keystroke, so the answer goes back through the hook.
     var gated = false
     /// What an always-allow rule from this card would cover. nil where none is offered.
@@ -211,6 +219,13 @@ struct PendingRequest: Identifiable {
 
     var folder: String {
         cwd.isEmpty ? "unknown" : (cwd as NSString).lastPathComponent
+    }
+
+    /// True once a read has looked for the menu later than it was due and found nothing there.
+    /// A clock on its own cannot say this: a read in flight, or one that lands late, still finds it.
+    func menuMissed(after wait: TimeInterval) -> Bool {
+        guard let lastRead, !lastRead.sawMenu else { return false }
+        return lastRead.at.timeIntervalSince(receivedAt) > wait
     }
 
     /// Claude Code draws a tick box on every option of a multiple-choice question, and nothing on a
