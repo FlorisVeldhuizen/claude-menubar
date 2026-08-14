@@ -177,6 +177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(withTitle: installed ? "Remove hooks from settings.json" : "Install hooks into settings.json",
                      action: #selector(toggleHooks), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reveal settings.json", action: #selector(revealSettings), keyEquivalent: "").target = self
+
+        let soundItem = menu.addItem(withTitle: "Sound", action: nil, keyEquivalent: "")
+        let sounds = NSMenu()
+        for name in Self.soundNames {
+            let item = sounds.addItem(withTitle: name, action: #selector(pickSound(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            item.state = name == Self.soundName ? .on : .off
+        }
+        soundItem.submenu = sounds
         let login = menu.addItem(withTitle: "Open at login", action: #selector(toggleLoginItem), keyEquivalent: "")
         login.target = self
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -200,6 +210,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             alert.informativeText = "This usually works only once the app is in /Applications."
             alert.runModal()
         }
+    }
+
+    /// Plays on selection so you can hear it before keeping it.
+    @objc private func pickSound(_ item: NSMenuItem) {
+        guard let name = item.representedObject as? String else { return }
+        Self.soundName = name
+        NSSound(named: name)?.play()
     }
 
     @objc private func revealSettings() {
@@ -243,8 +260,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    static let soundNames = ["Pop", "Purr", "Bottle", "Glass", "Submarine", "Ping", "Hero", "Tink", "None"]
+
+    private static var soundName: String {
+        get { UserDefaults.standard.string(forKey: "sound") ?? "Pop" }
+        set { UserDefaults.standard.set(newValue, forKey: "sound") }
+    }
+
     private func announce(_ request: PendingRequest) {
-        NSSound(named: "Tink")?.play()
+        NSSound(named: Self.soundName)?.play()
 
         guard notificationsReady, !popover.isShown else { return }
         let content = UNMutableNotificationContent()

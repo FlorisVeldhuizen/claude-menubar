@@ -106,6 +106,9 @@ Claude reads it and carries on, but it does see a denied tool call rather than a
 Jumping to a gated session opens VS Code at that folder via its URL handler, when the session
 reported itself as VS Code.
 
+A new request plays a short sound. Right-click the menu bar icon → **Sound** to pick another; it
+plays as you select so you can hear it first, and **None** turns it off.
+
 ## Configuration
 
 `CLAUDE_MENUBAR_PORT` (default `7788`) sets the loopback port; change it and reinstall the hooks.
