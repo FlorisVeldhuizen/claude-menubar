@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="Claude MenuBar"
+APP_NAME="Permission Relay"
 BUNDLE_ID="dev.local.claude-menubar"
 APP="$ROOT/build/$APP_NAME.app"
-VERSION="1.0"
+VERSION="0.1"
 # Which build you are running, since the app never updates itself: the commit count reads as a
 # version number, the hash says exactly what is in it.
 BUILD="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
@@ -42,9 +42,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSAppleEventsUsageDescription</key><string>Claude MenuBar brings the terminal tab running a Claude Code session to the front.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Permission Relay brings the terminal tab running a Claude Code session to the front.</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>MIT licence · $(date +%Y)</string>
+    <key>NSHumanReadableCopyright</key><string>© $(date +%Y) Floris Veldhuizen · MIT licence</string>
 </dict>
 </plist>
 PLIST

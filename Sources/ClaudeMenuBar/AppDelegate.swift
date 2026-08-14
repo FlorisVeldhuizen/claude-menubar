@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 store: store,
                 port: Self.port,
                 onInstallHooks: { [weak self] in self?.toggleHooks() },
+                onAbout: { [weak self] in self?.showAbout() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -220,15 +221,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Which build this is. The app never updates itself, so this is the only way to tell.
     private static var buildLine: String {
         let info = Bundle.main.infoDictionary
-        guard let version = info?["CFBundleShortVersionString"] as? String else { return "Claude MenuBar" }
+        guard let version = info?["CFBundleShortVersionString"] as? String else { return "Permission Relay" }
         let build = info?["CFBundleVersion"] as? String ?? "?"
         let commit = info?["GitCommit"] as? String ?? "?"
-        return "Claude MenuBar \(version) · build \(build) · \(commit)"
+        return "Permission Relay \(version) · build \(build) · \(commit)"
+    }
+
+    /// The standard panel, because it already knows how to lay out an icon, a version and a copyright
+    /// line, and because this app has no menu bar of its own to put an About item in.
+    @objc func showAbout() {
+        let commit = Bundle.main.infoDictionary?["GitCommit"] as? String ?? "?"
+        let credits = NSMutableAttributedString()
+        // The name is already on the copyright line below this, so only the commit goes here.
+        credits.append(NSAttributedString(
+            string: "commit \(commit)\n",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        ))
+        credits.append(NSAttributedString(
+            string: "github.com/FlorisVeldhuizen/claude-menubar",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .link: "https://github.com/FlorisVeldhuizen/claude-menubar",
+            ]
+        ))
+        let centred = NSMutableParagraphStyle()
+        centred.alignment = .center
+        credits.addAttribute(.paragraphStyle, value: centred, range: NSRange(location: 0, length: credits.length))
+
+        // An accessory app has no windows of its own, so nothing brings this one forward for it.
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
     private func showMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: Self.buildLine, action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "About Permission Relay", action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(.separator())
         let installed = HookInstaller.isInstalled(port: Self.port)
         menu.addItem(withTitle: installed ? "Hooks installed" : "Hooks not installed", action: nil, keyEquivalent: "")

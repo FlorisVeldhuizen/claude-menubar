@@ -1,4 +1,4 @@
-# Claude MenuBar
+# Permission Relay
 
 A macOS menu bar app for running several Claude Code sessions at once. It lists every live session
 and turns permission prompts into one-click choices, so you answer from the menu bar instead of
@@ -25,7 +25,8 @@ That builds it, copies it to `/Applications` and launches it. Without `--install
 Then open the panel and press **Install hooks**. That writes the hook entries into
 `~/.claude/settings.json`, backing up the old file alongside it and leaving your existing hooks
 alone. Running sessions are picked up without restarting. Right-click the menu bar icon to remove
-them again, or to see which build you are on.
+them again, or to see which build you are on. **About Permission Relay**, in that menu and in the
+panel's **⋯** menu, names the version, the build and the commit it was built from.
 
 ## Using it
 

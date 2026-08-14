@@ -4,6 +4,7 @@ struct ConsoleView: View {
     let store: Store
     let port: UInt16
     var onInstallHooks: () -> Void
+    var onAbout: () -> Void
     var onQuit: () -> Void
 
     @State private var noteTarget: String?
@@ -136,7 +137,7 @@ struct ConsoleView: View {
 
             Spacer()
 
-            PanelMenu(store: store, onInstallHooks: onInstallHooks, onQuit: onQuit)
+            PanelMenu(store: store, onInstallHooks: onInstallHooks, onAbout: onAbout, onQuit: onQuit)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
@@ -418,6 +419,7 @@ private struct ElapsedLabel: View {
 private struct PanelMenu: View {
     let store: Store
     var onInstallHooks: () -> Void
+    var onAbout: () -> Void
     var onQuit: () -> Void
 
     var body: some View {
@@ -436,6 +438,7 @@ private struct PanelMenu: View {
             Divider()
             Button(store.hooksInstalled ? "Remove hooks" : "Install hooks", action: onInstallHooks)
             Divider()
+            Button("About Permission Relay", action: onAbout)
             Button("Quit", action: onQuit)
         } label: {
             Image(systemName: store.muted ? "speaker.slash.circle" : "ellipsis.circle")
